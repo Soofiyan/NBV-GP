@@ -1,0 +1,5 @@
+metric_depth/data/*
+metric_depth/wandb/*
+*.pyc
+*.pth
+*.pt
