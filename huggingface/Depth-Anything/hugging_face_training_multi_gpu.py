@@ -131,7 +131,7 @@ def save_plot(label, affordance_map, mask, epoch):
     axs[2].axis("off")
 
     plt.tight_layout()  # Adjust subplots to fit into the figure area.
-    save_path = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/results_plots"
+    save_path = "/home/ubuntu/results_plots"
     plt.savefig(f"{save_path}/epoch_{epoch}.png")
 
 
@@ -147,7 +147,7 @@ def init_model():
     for name, param in model.named_parameters():
         if "pretrained" in name or "depth_head.scratch.output_conv" in name:
             param.requires_grad = False
-        # print(name, param.requires_grad)
+        print(name, param.requires_grad)
 
     criterion = torch.nn.HuberLoss()
     # optimizer = torch.optim.AdamW(
@@ -170,7 +170,8 @@ def train(train_dataloader, val_dataloader):
 
     if(torch.cuda.device_count() > 1):
         model = torch.nn.DataParallel(model)
-
+    
+    model.to(device)
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 
     running_loss = 0.0
@@ -188,8 +189,10 @@ def train(train_dataloader, val_dataloader):
         for images, labels, mask in train_dataloader:
             images, labels, mask = images.to(device), labels.to(device), mask.to(device)
             optimizer.zero_grad()
-
+            
+            print(images.shape, labels.shape, mask.shape)
             depth_out, affordance_map_out = model(images, mask)
+            print(affordance_map_out.shape)
             loss = criterion(affordance_map_out, labels).to("cuda")
 
             scaled_loss = loss * scaling_factor
@@ -205,7 +208,6 @@ def train(train_dataloader, val_dataloader):
         print(f"Epoch {epoch + 1}, Loss: {epoch_loss}")
 
         model.eval()  # Set the model to evaluation mode
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         validation_loss = 0.0
 
         with torch.no_grad():  # Disable gradient computation
@@ -215,7 +217,9 @@ def train(train_dataloader, val_dataloader):
                     labels.to(device),
                     mask.to(device),
                 )
+                print("got images", mask.shape, labels.shape, images.shape)
                 _, affordance_map_out = model(images, mask)
+                print("got affordance", affordance_map_out.shape)
                 loss = criterion(affordance_map_out, labels).to("cuda")
                 scaled_loss = loss * scaling_factor
 
@@ -225,10 +229,10 @@ def train(train_dataloader, val_dataloader):
         avg_validation_loss = validation_loss / len(val_dataloader)
         if avg_validation_loss < lowest_loss:
             lowest_loss = avg_validation_loss
-            # torch.save(
-            #     model.state_dict(),
-            #     "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/checkpoint_finetune.pth",
-            # )
+            torch.save(
+            	model.state_dict(),
+               "/home/ubuntu/checkpoint_finetune.pth",
+            )
         print(f"Validation Loss: {avg_validation_loss}")
 
         save_plot(labels[0], affordance_map_out[0], mask[0], epoch)
@@ -243,8 +247,8 @@ if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
 
     dataset = CustomDataset(
-        images_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp",
-        labels_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/labels_nbv_3F",
+        images_root="/home/ubuntu/temp",
+        labels_root="/home/ubuntu/labels_nbv_3F",
     )
 
     # Determine sizes for training and validation sets
@@ -255,10 +259,10 @@ if __name__ == "__main__":
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=12, shuffle=True, num_workers=1
+        train_dataset, batch_size=4, shuffle=True, num_workers=0
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=12, shuffle=False, num_workers=1
+        val_dataset, batch_size=4, shuffle=False, num_workers=0
     )
 
     # Example training loop
