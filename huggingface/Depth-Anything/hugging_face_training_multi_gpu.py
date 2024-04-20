@@ -137,7 +137,6 @@ def save_plot(label, affordance_map, mask, epoch):
 
 def init_model():
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
-    model = model.to("cuda")
     # model.load_state_dict(
     #     torch.load(
     #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/temp.pth"
@@ -170,14 +169,12 @@ def train(train_dataloader, val_dataloader):
 
     if(torch.cuda.device_count() > 1):
         model = torch.nn.DataParallel(model)
-    
     model.to(device)
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 
     running_loss = 0.0
 
     scaling_factor = 10e3
-    gamma = 2
 
     model.train()
 
@@ -193,7 +190,7 @@ def train(train_dataloader, val_dataloader):
             print(images.shape, labels.shape, mask.shape)
             depth_out, affordance_map_out = model(images, mask)
             print(affordance_map_out.shape)
-            loss = criterion(affordance_map_out, labels).to("cuda")
+            loss = criterion(affordance_map_out, labels)
 
             scaled_loss = loss * scaling_factor
 
@@ -220,7 +217,7 @@ def train(train_dataloader, val_dataloader):
                 print("got images", mask.shape, labels.shape, images.shape)
                 _, affordance_map_out = model(images, mask)
                 print("got affordance", affordance_map_out.shape)
-                loss = criterion(affordance_map_out, labels).to("cuda")
+                loss = criterion(affordance_map_out, labels)
                 scaled_loss = loss * scaling_factor
 
                 validation_loss += scaled_loss.item()
