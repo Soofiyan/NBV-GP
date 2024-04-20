@@ -60,7 +60,7 @@ class CustomDataset(Dataset):
             for folder_id_path in glob.glob(os.path.join(run_id_path, "3F", "*")):
                 folder_id = os.path.basename(folder_id_path)
                 # For each image file within the folder_id directory
-                for image_file in glob.glob(os.path.join(folder_id_path, "rgb*.npy")):
+                for image_file in glob.glob(os.path.join(folder_id_path, "rgb*.jpg")):
                     # Derive the base name for the image file to match labels
                     base_name = os.path.splitext(os.path.basename(image_file))[0]
                     count = base_name.split("_")[-1]
@@ -73,7 +73,7 @@ class CustomDataset(Dataset):
                         f"affordance_map_*_{folder_id}_{count}.png",
                     )
                     # Find all matching label files and add to pairs
-                    segmask_file = image_file.replace("rgb", "segmask")
+                    segmask_file = image_file.replace("rgb", "segmask").replace(".jpg", ".png")
                     for label_file in glob.glob(label_pattern):
                         label_img = Image.open(label_file).convert("L")
                         if (
@@ -87,12 +87,10 @@ class CustomDataset(Dataset):
         image_file, label_file, segmask_file = self.image_label_pairs[idx]
 
         # Load image
-        numpy_image = np.load(image_file).astype(np.uint8)
+        numpy_image = cv2.imread(image_file).astype(np.uint8)
         crop_bin_dim = [73, 287, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
-        plt.imshow(numpy_image)
-        plt.show()
         numpy_image = np.array(numpy_image).astype(np.float32) / 255.0
         image = (
             torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255).to("cuda")
@@ -106,7 +104,7 @@ class CustomDataset(Dataset):
         label = torch.from_numpy(numpy_label).unsqueeze(0).float().div(255).to("cuda")
         label = self.resize_transform(label)
 
-        numpy_mask = np.load(segmask_file)
+        numpy_mask = cv2.imread(segmask_file, cv2.IMREAD_GRAYSCALE)
         match = re.search(self.pattern, label_file)
         mask_id = match.group(1)
         numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)

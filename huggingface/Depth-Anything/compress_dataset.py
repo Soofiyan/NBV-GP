@@ -40,19 +40,23 @@ def compress_dataset(images_root, labels_root, output_root):
                 image_id = os.path.basename(image_path).split(".")[0]
 
                 segmask_file = image_path.replace("rgb", "segmask")
-                output_segmask_file = segmask_file.replace("observation_data_nbv_3F", "compress_observation").replace(".png", ".jpg")
+                output_segmask_file = segmask_file.replace("observation_data_nbv_3F", "compress_observation")
                 output_image_path = image_path.replace("observation_data_nbv_3F", "compress_observation").replace(".png", ".jpg")
                 segmask_file = segmask_file.replace(".png", ".npy")
 
                 os.makedirs(os.path.dirname(output_image_path), exist_ok=True)
+                # cv2.imwrite(
+                #     output_image_path,
+                #     cv2.imread(image_path),
+                # )
+                try:
+                    os.remove(output_segmask_file.replace(".png", ".jpg"))
+                except:
+                    pass
                 os.makedirs(os.path.dirname(output_segmask_file), exist_ok=True)
                 cv2.imwrite(
-                    output_image_path,
-                    cv2.imread(image_path),
-                )
-                cv2.imwrite(
                     output_segmask_file,
-                    np.load(segmask_file, cv2.IMREAD_GRAYSCALE).astype(np.uint8),
+                    np.load(segmask_file).astype(np.uint8),
                 )
 
 
