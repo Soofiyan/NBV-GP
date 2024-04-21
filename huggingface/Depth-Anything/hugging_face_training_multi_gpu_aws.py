@@ -258,7 +258,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
                 # progress_bar.update(1)
         avg_validation_loss = validation_loss / len(val_dataloader)
-        if avg_validation_loss < lowest_loss:
+        if rank == 0 and avg_validation_loss < lowest_loss:
             lowest_loss = avg_validation_loss
             torch.save(
             	model.state_dict(),
