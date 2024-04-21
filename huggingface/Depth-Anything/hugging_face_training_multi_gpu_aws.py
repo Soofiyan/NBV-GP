@@ -159,7 +159,7 @@ def init_model():
     for name, param in model.named_parameters():
         if "pretrained" in name or "depth_head.scratch.output_conv" in name:
             param.requires_grad = False
-        print(name, param.requires_grad)
+        # print(name, param.requires_grad)
 
     criterion = torch.nn.HuberLoss()
     # optimizer = torch.optim.AdamW(
@@ -174,13 +174,13 @@ def init_model():
     return model, criterion, optimizer, scheduler
 
 
-def train(rank, world_size, train_dataloader, val_dataloader):
+def train(rank, world_size, images_root_path, labels_root_path):
 
     setup(rank, world_size)
 
     dataset = CustomDataset(
-        images_root="/home/ubuntu/temp",
-        labels_root="/home/ubuntu/labels_nbv_3F",
+        images_root=images_root_path,
+        labels_root=labels_root_path,
     )
 
     # Determine sizes for training and validation sets
@@ -194,10 +194,10 @@ def train(rank, world_size, train_dataloader, val_dataloader):
     sampler_val = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=32, sampler=sampler_train, num_workers=4
+        train_dataset, batch_size=12, sampler=sampler_train, num_workers=4
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=32, sampler=sampler_val, num_workers=4
+        val_dataset, batch_size=12, sampler=sampler_val, num_workers=4
     )
 
     num_epoch = 50
@@ -224,9 +224,8 @@ def train(rank, world_size, train_dataloader, val_dataloader):
             images, labels, mask = images.to(rank), labels.to(rank), mask.to(rank)
             optimizer.zero_grad()
             
-            print(images.shape, labels.shape, mask.shape)
             depth_out, affordance_map_out = model(images, mask)
-            print(affordance_map_out.shape)
+            
             loss = criterion(affordance_map_out, labels)
 
             scaled_loss = loss * scaling_factor
@@ -251,9 +250,7 @@ def train(rank, world_size, train_dataloader, val_dataloader):
                     labels.to(rank),
                     mask.to(rank),
                 )
-                print("got images", mask.shape, labels.shape, images.shape)
                 _, affordance_map_out = model(images, mask)
-                print("got affordance", affordance_map_out.shape)
                 loss = criterion(affordance_map_out, labels)
                 scaled_loss = loss * scaling_factor
 
@@ -285,7 +282,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
 
-    images_root="/home/ubuntu/temp"
+    images_root="/home/ubuntu/compress_observation"
     labels_root="/home/ubuntu/labels_nbv_3F"
 
     
