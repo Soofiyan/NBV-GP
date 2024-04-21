@@ -205,7 +205,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
     model, criterion, optimizer, scheduler = init_model()
 
     model.to(rank)
-    model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+    model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
 
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 
@@ -238,7 +238,8 @@ def train(rank, world_size, images_root_path, labels_root_path):
             # print(f"Loss: {loss.item()}")
 
         epoch_loss = running_loss / len(train_dataloader)
-        print(f"Epoch {epoch + 1}, Loss: {epoch_loss}")
+        if(rank == 0):
+            print(f"Epoch {epoch + 1}, Loss: {epoch_loss}")
 
         model.eval()  # Set the model to evaluation mode
         validation_loss = 0.0
@@ -264,7 +265,8 @@ def train(rank, world_size, images_root_path, labels_root_path):
             	model.state_dict(),
                "/home/ubuntu/checkpoint_finetune.pth",
             )
-        print(f"Validation Loss: {avg_validation_loss}")
+        if(rank == 0):
+            print(f"Validation Loss: {avg_validation_loss}")
 
         save_plot(labels[0], affordance_map_out[0], mask[0], epoch)
 
