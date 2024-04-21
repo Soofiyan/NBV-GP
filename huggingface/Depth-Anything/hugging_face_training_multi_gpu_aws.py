@@ -183,7 +183,7 @@ def train(rank, world_size, train_dataloader, val_dataloader):
         labels_root="/home/ubuntu/labels_nbv_3F",
     )
 
-    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
+    sampler_train = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
 
     # Determine sizes for training and validation sets
     train_size = int(0.8 * len(dataset))
@@ -193,10 +193,10 @@ def train(rank, world_size, train_dataloader, val_dataloader):
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=4, shuffle=True, num_workers=0
+        train_dataset, batch_size=32, sampler=sampler, num_workers=4
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=4, shuffle=False, num_workers=0
+        val_dataset, batch_size=32, sampler=sampler, num_workers=4
     )
 
     num_epoch = 50
