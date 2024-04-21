@@ -18,6 +18,9 @@ import pandas as pd
 import os
 import glob
 import torch.multiprocessing as mp
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 import random
 import re
 
@@ -41,10 +44,10 @@ class CustomDataset(Dataset):
 
         self.resize_transform = transforms.Resize(
             (518, 518), interpolation=transforms.InterpolationMode.BICUBIC
-        ).to("cuda")
+        )
         self.normalize_transform = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-        ).to("cuda")
+        )
 
         self.image_label_pairs = self._get_image_label_pairs()
 
@@ -93,7 +96,7 @@ class CustomDataset(Dataset):
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
         numpy_image = np.array(numpy_image).astype(np.float32) / 255.0
         image = (
-            torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255).to("cuda")
+            torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         )
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
@@ -101,7 +104,7 @@ class CustomDataset(Dataset):
         # Load label
         label = Image.open(label_file).convert("L")
         numpy_label = np.array(label)
-        label = torch.from_numpy(numpy_label).unsqueeze(0).float().div(255).to("cuda")
+        label = torch.from_numpy(numpy_label).unsqueeze(0).float().div(255)
         label = self.resize_transform(label)
 
         numpy_mask = cv2.imread(segmask_file, cv2.IMREAD_GRAYSCALE)
@@ -109,7 +112,7 @@ class CustomDataset(Dataset):
         mask_id = match.group(1)
         numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
         mask = numpy_mask == int(mask_id)
-        mask = torch.from_numpy(mask).unsqueeze(0).to("cuda")
+        mask = torch.from_numpy(mask).unsqueeze(0)
         mask = self.resize_transform(mask)
 
         return image, label, mask
@@ -131,8 +134,18 @@ def save_plot(label, affordance_map, mask, epoch):
     axs[2].axis("off")
 
     plt.tight_layout()  # Adjust subplots to fit into the figure area.
-    save_path = "/home/ubuntu/results_plots"
+    save_path = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/results_plots"
     plt.savefig(f"{save_path}/epoch_{epoch}.png")
+
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+def cleanup():
+    dist.destroy_process_group()
 
 
 def init_model():
@@ -146,7 +159,7 @@ def init_model():
     for name, param in model.named_parameters():
         if "pretrained" in name or "depth_head.scratch.output_conv" in name:
             param.requires_grad = False
-        print(name, param.requires_grad)
+        # print(name, param.requires_grad)
 
     criterion = torch.nn.HuberLoss()
     # optimizer = torch.optim.AdamW(
@@ -161,15 +174,37 @@ def init_model():
     return model, criterion, optimizer, scheduler
 
 
-def train(train_dataloader, val_dataloader):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def train(rank, world_size, train_dataloader, val_dataloader):
+
+    setup(rank, world_size)
+
+    dataset = CustomDataset(
+        images_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp",
+        labels_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/labels_nbv_3F",
+    )
+
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
+
+    # Determine sizes for training and validation sets
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+
+    # Split the dataset into training and validation sets
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
+    train_dataloader = DataLoader(
+        train_dataset, batch_size=4, shuffle=True, num_workers=0
+    )
+    val_dataloader = DataLoader(
+        val_dataset, batch_size=4, shuffle=False, num_workers=0
+    )
+
     num_epoch = 50
 
     model, criterion, optimizer, scheduler = init_model()
 
-    if(torch.cuda.device_count() > 1):
-        model = torch.nn.DataParallel(model)
-    model.to(device)
+    model.to(rank)
+    model = DDP(model, device_ids=[rank], find_unused_parameters=True)
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 
     running_loss = 0.0
@@ -184,7 +219,7 @@ def train(train_dataloader, val_dataloader):
         running_loss = 0.0
 
         for images, labels, mask in train_dataloader:
-            images, labels, mask = images.to(device), labels.to(device), mask.to(device)
+            images, labels, mask = images.to(rank), labels.to(rank), mask.to(rank)
             optimizer.zero_grad()
             
             print(images.shape, labels.shape, mask.shape)
@@ -210,9 +245,9 @@ def train(train_dataloader, val_dataloader):
         with torch.no_grad():  # Disable gradient computation
             for images, labels, mask in val_dataloader:
                 images, labels, mask = (
-                    images.to(device),
-                    labels.to(device),
-                    mask.to(device),
+                    images.to(rank),
+                    labels.to(rank),
+                    mask.to(rank),
                 )
                 print("got images", mask.shape, labels.shape, images.shape)
                 _, affordance_map_out = model(images, mask)
@@ -228,7 +263,7 @@ def train(train_dataloader, val_dataloader):
             lowest_loss = avg_validation_loss
             torch.save(
             	model.state_dict(),
-               "/home/ubuntu/checkpoint_finetune.pth",
+               "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/temp.pth",
             )
         print(f"Validation Loss: {avg_validation_loss}")
 
@@ -237,32 +272,23 @@ def train(train_dataloader, val_dataloader):
         model.train()
 
         scheduler.step(avg_validation_loss)
+    
+    cleanup()
 
 
 if __name__ == "__main__":
     # Set the start method to 'spawn'
-    mp.set_start_method("spawn", force=True)
+    # mp.set_start_method("spawn", force=True)
 
-    dataset = CustomDataset(
-        images_root="/home/ubuntu/temp",
-        labels_root="/home/ubuntu/labels_nbv_3F",
-    )
+    world_size = torch.cuda.device_count()
 
-    # Determine sizes for training and validation sets
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
 
-    # Split the dataset into training and validation sets
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+    images_root="/home/ubuntu/temp"
+    labels_root="/home/ubuntu/labels_nbv_3F"
 
-    train_dataloader = DataLoader(
-        train_dataset, batch_size=4, shuffle=True, num_workers=0
-    )
-    val_dataloader = DataLoader(
-        val_dataset, batch_size=4, shuffle=False, num_workers=0
-    )
+    
 
     # Example training loop
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    mp.spawn(train, args=(world_size, images_root, labels_root), nprocs=world_size, join=True)
 
-    train(train_dataloader, val_dataloader)
+    # train(rank, world_size, train_dataloader, val_dataloader)
