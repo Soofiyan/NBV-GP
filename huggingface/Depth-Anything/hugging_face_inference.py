@@ -21,6 +21,9 @@ import torch.multiprocessing as mp
 import random
 import re
 
+
+import torch.distributed as dist
+
 from tqdm.auto import tqdm
 
 
@@ -118,12 +121,14 @@ def view_plot(affordance_map, mask):
 
 
 def init_model():
+    # os.environ['MASTER_ADDR'] = 'localhost'
+    # os.environ['MASTER_PORT'] = '12355'
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
-    model.load_state_dict(
-        torch.load(
-            "checkpoint_finetune.pth"
-        )
-    )
+    # dist.init_process_group(backend='nccl', init_method='env://', rank=0, world_size=1)
+    # model = torch.load(
+    #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth"
+    #     )
+    model.load_state_dict(torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/initial_training.pth"))
     model = model.to("cuda")
 
     for name, param in model.named_parameters():
@@ -168,6 +173,7 @@ def test(val_dataloader):
                 cv2.imshow("image", raw_images[0])
                 cv2.waitKey(0)
                 view_plot(affordance_map_out[0], mask[0])
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

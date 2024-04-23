@@ -147,6 +147,23 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
+def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
+    # Calculate the errors
+    errors = predictions - labels
+    # Define weights; here we use 1/(scores + epsilon) to avoid division by zero
+    weights = 1 / (torch.abs(errors) + epsilon)
+    # Calculate Huber loss
+    is_small_error = torch.abs(errors) < delta
+    squared_loss = 0.5 * (errors ** 2)
+    linear_loss = delta * (torch.abs(errors) - 0.5 * delta)
+    # Combine using a mask
+    huber_loss = torch.where(is_small_error, squared_loss, linear_loss)
+    weighted_huber = weights * huber_loss
+    # Mean over all samples
+    loss = torch.mean(weighted_huber)
+    return loss
+
+
 
 def init_model():
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
@@ -222,12 +239,10 @@ def train(rank, world_size, train_dataloader, val_dataloader):
             images, labels, mask = images.to(rank), labels.to(rank), mask.to(rank)
             optimizer.zero_grad()
             
-            print(images.shape, labels.shape, mask.shape)
             depth_out, affordance_map_out = model(images, mask)
-            print(affordance_map_out.shape)
-            loss = criterion(affordance_map_out, labels)
-
-            scaled_loss = loss * scaling_factor
+            
+            weighted_loss = weighted_huber_loss(affordance_map_out, labels)
+            scaled_loss = weighted_loss * scaling_factor
 
             scaled_loss.backward()
             optimizer.step()
@@ -249,11 +264,11 @@ def train(rank, world_size, train_dataloader, val_dataloader):
                     labels.to(rank),
                     mask.to(rank),
                 )
-                print("got images", mask.shape, labels.shape, images.shape)
+                
                 _, affordance_map_out = model(images, mask)
-                print("got affordance", affordance_map_out.shape)
-                loss = criterion(affordance_map_out, labels)
-                scaled_loss = loss * scaling_factor
+                # loss = criterion(affordance_map_out, labels)
+                weighted_loss = weighted_huber_loss(affordance_map_out, labels)
+                scaled_loss = weighted_loss * scaling_factor
 
                 validation_loss += scaled_loss.item()
 
@@ -262,7 +277,7 @@ def train(rank, world_size, train_dataloader, val_dataloader):
         if avg_validation_loss < lowest_loss:
             lowest_loss = avg_validation_loss
             torch.save(
-            	model.state_dict(),
+            	model,
                "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/temp.pth",
             )
         print(f"Validation Loss: {avg_validation_loss}")

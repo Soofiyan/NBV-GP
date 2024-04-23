@@ -147,6 +147,21 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
+def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
+    # Calculate the errors
+    errors = predictions - labels
+    # Define weights; here we use 1/(scores + epsilon) to avoid division by zero
+    weights = 1 / (torch.abs(errors) + epsilon)
+    # Calculate Huber loss
+    is_small_error = torch.abs(errors) < delta
+    squared_loss = 0.5 * (errors ** 2)
+    linear_loss = delta * (torch.abs(errors) - 0.5 * delta)
+    # Combine using a mask
+    huber_loss = torch.where(is_small_error, squared_loss, linear_loss)
+    weighted_huber = weights * huber_loss
+    # Mean over all samples
+    loss = torch.mean(weighted_huber)
+    return loss
 
 def init_model():
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
@@ -225,10 +240,9 @@ def train(rank, world_size, images_root_path, labels_root_path):
             optimizer.zero_grad()
             
             depth_out, affordance_map_out = model(images, mask)
-            
-            loss = criterion(affordance_map_out, labels)
 
-            scaled_loss = loss * scaling_factor
+            weighted_loss = weighted_huber_loss(affordance_map_out, labels)
+            scaled_loss = weighted_loss * scaling_factor
 
             scaled_loss.backward()
             optimizer.step()
@@ -251,8 +265,8 @@ def train(rank, world_size, images_root_path, labels_root_path):
                     mask.to(rank),
                 )
                 _, affordance_map_out = model(images, mask)
-                loss = criterion(affordance_map_out, labels)
-                scaled_loss = loss * scaling_factor
+                weighted_loss = weighted_huber_loss(affordance_map_out, labels)
+                scaled_loss = weighted_loss * scaling_factor
 
                 validation_loss += scaled_loss.item()
 

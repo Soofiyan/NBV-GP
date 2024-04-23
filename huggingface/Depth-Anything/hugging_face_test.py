@@ -151,6 +151,22 @@ def view_plot(label, affordance_map, mask):
     plt.show()
 
 
+def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
+    # Calculate the errors
+    errors = predictions - labels
+    # Define weights; here we use 1/(scores + epsilon) to avoid division by zero
+    weights = 1 / (torch.abs(errors) + epsilon)
+    # Calculate Huber loss
+    is_small_error = torch.abs(errors) < delta
+    squared_loss = 0.5 * (errors ** 2)
+    linear_loss = delta * (torch.abs(errors) - 0.5 * delta)
+    # Combine using a mask
+    huber_loss = torch.where(is_small_error, squared_loss, linear_loss)
+    weighted_huber = weights * huber_loss
+    # Mean over all samples
+    loss = torch.mean(weighted_huber)
+    return loss
+
 def init_model():
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
     model.load_state_dict(
@@ -193,7 +209,6 @@ def test(val_dataloader):
                 affordance_max_value = torch.max(affordance_map_out.squeeze(0).squeeze(0))
                 affordance_coordiantes = torch.where(affordance_map_out.squeeze(0).squeeze(0) == affordance_max_value)
 
-                print(affordance_coordiantes)
                 labels_max_value = torch.max(labels.squeeze(0).squeeze(0))
                 labels_coordiantes = torch.where(labels.squeeze(0).squeeze(0) == labels_max_value)
                 raw_images = raw_images.cpu().detach().numpy()
@@ -208,6 +223,9 @@ def test(val_dataloader):
 
                 loss = criterion(affordance_map_out, labels).to("cuda")
                 scaled_loss = loss * scaling_factor
+
+                weighted_huber_loss_val = weighted_huber_loss(affordance_map_out, labels)
+                print(scaled_loss, weighted_huber_loss_val*scaling_factor)
 
     print(f"Validation Loss: {scaled_loss}")
 
