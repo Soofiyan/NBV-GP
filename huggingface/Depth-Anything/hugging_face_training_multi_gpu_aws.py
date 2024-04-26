@@ -166,17 +166,12 @@ def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
 
 def init_model():
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
-    # model.load_state_dict(
-    #     torch.load(
-    #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/temp.pth"
-    #     )
-    # )
-
+   
     for name, param in model.named_parameters():
         if "pretrained" in name or "depth_head.scratch.output_conv" in name:
             param.requires_grad = False
         # print(name, param.requires_grad)
-
+    
     criterion = torch.nn.HuberLoss()
     # optimizer = torch.optim.AdamW(
     #     filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-1
@@ -210,10 +205,10 @@ def train(rank, world_size, images_root_path, labels_root_path):
     sampler_val = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=12, sampler=sampler_train, num_workers=4
+        train_dataset, batch_size=12, sampler=sampler_train, num_workers=12
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=12, sampler=sampler_val, num_workers=4
+        val_dataset, batch_size=12, sampler=sampler_val, num_workers=12
     )
 
     num_epoch = 50
@@ -221,7 +216,15 @@ def train(rank, world_size, images_root_path, labels_root_path):
     model, criterion, optimizer, scheduler = init_model()
 
     model.to(rank)
-    model = DDP(model, device_ids=[rank])
+
+    model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+
+
+    # model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
+    
+    # model = torch.load(
+    #        "/home/ubuntu/checkpoint_finetune2.pth"
+    #     )
 
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 
@@ -242,8 +245,11 @@ def train(rank, world_size, images_root_path, labels_root_path):
             
             depth_out, affordance_map_out = model(images, mask)
 
-            weighted_loss = weighted_huber_loss(affordance_map_out, labels)
-            scaled_loss = weighted_loss * scaling_factor
+            # weighted_loss = weighted_huber_loss(affordance_map_out, labels)
+            # scaled_loss = weighted_loss * scaling_factor
+            
+            loss = criterion(affordance_map_out, label)
+            scaled_loss = loss * scaling_factor
 
             scaled_loss.backward()
             optimizer.step()
@@ -267,8 +273,11 @@ def train(rank, world_size, images_root_path, labels_root_path):
                     mask.to(rank),
                 )
                 _, affordance_map_out = model(images, mask)
-                weighted_loss = weighted_huber_loss(affordance_map_out, labels)
-                scaled_loss = weighted_loss * scaling_factor
+                # weighted_loss = weighted_huber_loss(affordance_map_out, labels)
+                # scaled_loss = weighted_loss * scaling_factor
+                
+                loss = criterion(affordance_map_out, labels)
+                scaled_loss = loss * scaling_factor
 
                 validation_loss += scaled_loss.item()
 
@@ -277,8 +286,8 @@ def train(rank, world_size, images_root_path, labels_root_path):
         if rank == 0 and avg_validation_loss < lowest_loss:
             lowest_loss = avg_validation_loss
             torch.save(
-            	model.state_dict(),
-               "/home/ubuntu/checkpoint_finetune.pth",
+            	model,
+               "/home/ubuntu/checkpoint_finetune2.pth",
             )
         if(rank == 0):
             print(f"Validation Loss: {avg_validation_loss}")
@@ -299,7 +308,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
 
-    images_root="/home/ubuntu/compress_observation"
+    images_root="/home/ubuntu/temp"
     labels_root="/home/ubuntu/labels_nbv_3F"
 
     
