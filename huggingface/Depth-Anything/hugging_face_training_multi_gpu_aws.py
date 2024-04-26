@@ -238,6 +238,8 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
     for epoch in range(num_epoch):
         running_loss = 0.0
+        sampler_train.set_epoch(epoch)
+        sampler_val.set_epoch(epoch)
 
         for images, labels, mask in train_dataloader:
             images, labels, mask = images.to(rank), labels.to(rank), mask.to(rank)
@@ -248,7 +250,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             # weighted_loss = weighted_huber_loss(affordance_map_out, labels)
             # scaled_loss = weighted_loss * scaling_factor
             
-            loss = criterion(affordance_map_out, label)
+            loss = criterion(affordance_map_out, labels)
             scaled_loss = loss * scaling_factor
 
             scaled_loss.backward()
