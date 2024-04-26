@@ -91,6 +91,7 @@ class CustomDataset(Dataset):
 
         # Load image
         numpy_image = cv2.imread(image_file).astype(np.uint8)
+        numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
         crop_bin_dim = [73, 287, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
@@ -220,7 +221,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
     model, criterion, optimizer, scheduler = init_model()
 
     model.to(rank)
-    model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
+    model = DDP(model, device_ids=[rank])
 
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 

@@ -172,6 +172,9 @@ class CustomDataset(Dataset):
 
         # Load image
         numpy_image = cv2.imread(image_file).astype(np.uint8)
+        numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
+        plt.imshow(numpy_image)
+        plt.show()
         crop_bin_dim = [73, 287, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
@@ -340,7 +343,7 @@ if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
 
     dataset = CustomDataset(
-        images_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/compress_observation",
+        images_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp",
         labels_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/labels_nbv_3F",
     )
 

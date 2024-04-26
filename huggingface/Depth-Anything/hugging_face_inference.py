@@ -60,6 +60,7 @@ class CustomSingleDataset(Dataset):
 
         # Load image
         numpy_image = np.load(image_file).astype(np.uint8)
+        numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
         crop_bin_dim = [242, 593, 362, 722]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
@@ -123,12 +124,20 @@ def view_plot(affordance_map, mask):
 def init_model():
     # os.environ['MASTER_ADDR'] = 'localhost'
     # os.environ['MASTER_PORT'] = '12355'
-    model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
+    # model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
     # dist.init_process_group(backend='nccl', init_method='env://', rank=0, world_size=1)
-    # model = torch.load(
-    #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth"
-    #     )
-    model.load_state_dict(torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/initial_training.pth"))
+    # # model = torch.load(
+    # #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth"
+    # #     )
+    # model_state_dict = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune.pth")
+    # new_state_dict = {k[len("module."):]: v for k, v in model_state_dict.items()}
+    # model.load_state_dict(new_state_dict)
+    # model = model.to("cuda")
+
+
+    model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
+    model_state_dict = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/initial_training.pth")
+    model.load_state_dict(model_state_dict)
     model = model.to("cuda")
 
     for name, param in model.named_parameters():
@@ -159,7 +168,9 @@ def test(val_dataloader):
                     images.to(device),
                     mask.to(device),
                 )
+                
                 _, affordance_map_out = model(images, mask)
+                affordance_map_out = affordance_map_out*mask.float()
                 affordance_max_value = torch.max(affordance_map_out.squeeze(0).squeeze(0))
                 affordance_coordiantes = torch.where(affordance_map_out.squeeze(0).squeeze(0) == affordance_max_value)
 

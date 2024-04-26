@@ -88,6 +88,7 @@ class CustomDataset(Dataset):
 
         # Load image
         numpy_image = np.load(image_file).astype(np.uint8)
+        numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
         crop_bin_dim = [73, 315, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
