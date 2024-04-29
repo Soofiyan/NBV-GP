@@ -23,6 +23,7 @@ import re
 
 from tqdm.auto import tqdm
 
+import torch.distributed as dist
 
 class CropTransform:
     def __init__(self, crop_dim):
@@ -88,8 +89,9 @@ class CustomDataset(Dataset):
 
         # Load image
         numpy_image = np.load(image_file).astype(np.uint8)
-        numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
-        crop_bin_dim = [73, 315, 195, 442]
+        # numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
+        
+        crop_bin_dim = [73, 290, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
         raw_image = numpy_image
@@ -169,10 +171,24 @@ def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
     return loss
 
 def init_model():
+
+    # os.environ['MASTER_ADDR'] = 'localhost'
+    # os.environ['MASTER_PORT'] = '12355'
+    # model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
+    # dist.init_process_group(backend='nccl', init_method='env://', rank=0, world_size=1)
+    # # model = torch.load(
+    # #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth"
+    # #     )
+    # model = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth")
+    # # new_state_dict = {k[len("module."):]: v for k, v in model_state_dict.items()}
+    # # model.load_state_dict(new_state_dict)
+    # model = model.to("cuda")
+
+
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
     model.load_state_dict(
         torch.load(
-            "checkpoint_finetune.pth"
+            "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/initial_training.pth"
         )
     )
     model = model.to("cuda")
@@ -212,23 +228,18 @@ def test(val_dataloader):
 
                 labels_max_value = torch.max(labels.squeeze(0).squeeze(0))
                 labels_coordiantes = torch.where(labels.squeeze(0).squeeze(0) == labels_max_value)
+                print(labels_coordiantes, affordance_coordiantes)
+                plt.imshow(affordance_map_out.squeeze(0).squeeze(0).detach().cpu().numpy())
+                plt.show()
                 raw_images = raw_images.cpu().detach().numpy()
-                resize_factor_x = 242 / 518
-                resize_factor_y = 247 / 518
-                cv2.circle(raw_images[0], (int(affordance_coordiantes[1].item()*resize_factor_x), int(affordance_coordiantes[0].item()*resize_factor_y)), 2, (0, 0, 255), -1)
-                cv2.circle(raw_images[0], (int(labels_coordiantes[1].item()*resize_factor_x), int(labels_coordiantes[0].item()*resize_factor_x)), 2, (0, 255, 0), -1)
+                image_size = raw_images[0].shape
+                resize_factor_x = image_size[0] / 518
+                resize_factor_y = image_size[1] / 518
+                cv2.circle(raw_images[0], (int(affordance_coordiantes[1].item()*resize_factor_y), int(affordance_coordiantes[0].item()*resize_factor_x)), 2, (0, 0, 255), -1)
+                cv2.circle(raw_images[0], (int(labels_coordiantes[1].item()*resize_factor_y), int(labels_coordiantes[0].item()*resize_factor_x)), 2, (0, 255, 0), -1)
                 cv2.imshow("image", raw_images[0])
                 cv2.waitKey(0)
                 view_plot(labels[0], affordance_map_out[0], mask[0])
-
-
-                loss = criterion(affordance_map_out, labels).to("cuda")
-                scaled_loss = loss * scaling_factor
-
-                weighted_huber_loss_val = weighted_huber_loss(affordance_map_out, labels)
-                print(scaled_loss, weighted_huber_loss_val*scaling_factor)
-
-    print(f"Validation Loss: {scaled_loss}")
 
 
 if __name__ == "__main__":

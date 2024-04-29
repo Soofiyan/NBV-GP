@@ -50,8 +50,8 @@ class CustomSingleDataset(Dataset):
 
     def _get_image_label_pairs(self):
         pairs = []
-        image_file = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Visual_language_model/Benchmarking_Data/VLM_model/3H/1699137970_rgb_image.npy"
-        segmask_file = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Visual_language_model/Benchmarking_Data/VLM_model/3H/1699137970_segmask.npy"
+        image_file = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/compress_observation/run_ID_14/3F/7/rgb_7_10.jpg"
+        segmask_file = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/compress_observation/run_ID_14/3F/7/segmask_7_10.png"
         pairs.append((image_file, segmask_file))
         return pairs
 
@@ -59,9 +59,10 @@ class CustomSingleDataset(Dataset):
         image_file, segmask_file = self.image_label_pairs[idx]
 
         # Load image
-        numpy_image = np.load(image_file).astype(np.uint8)
+        numpy_image = cv2.imread(image_file).astype(np.uint8)
         numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
-        crop_bin_dim = [242, 593, 362, 722]
+        
+        crop_bin_dim = [74, 291, 196, 445]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
         raw_image = numpy_image
@@ -69,20 +70,23 @@ class CustomSingleDataset(Dataset):
         image = (
             torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255).to("cuda")
         )
+
         image = self.resize_transform(image)
         image = self.normalize_transform(image)
 
-        numpy_mask = np.load(segmask_file)
-        for mask_id in range(np.unique(numpy_mask).shape[0]):
-            if(mask_id == 0):
+        numpy_mask = cv2.imread(segmask_file, 0)
+        plt.imshow(numpy_mask)
+        plt.show()
+        for mask_id in np.unique(numpy_mask):
+            if(mask_id != 10):
                 continue
             numpy_mask_tensor = torch.from_numpy(numpy_mask).to("cuda")
             numpy_mask_tensor = CropTransform(crop_bin_dim)(numpy_mask_tensor)
             mask = numpy_mask_tensor == int(mask_id)
             mask = mask.unsqueeze(0).float()
             mask = self.resize_transform(mask)
-            if(random.random() < 0.5):
-                break
+            # if(random.random() < 0.5):
+            #     break
 
         return raw_image, image, mask
 
@@ -122,23 +126,23 @@ def view_plot(affordance_map, mask):
 
 
 def init_model():
-    # os.environ['MASTER_ADDR'] = 'localhost'
-    # os.environ['MASTER_PORT'] = '12355'
-    # model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
-    # dist.init_process_group(backend='nccl', init_method='env://', rank=0, world_size=1)
-    # # model = torch.load(
-    # #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth"
-    # #     )
-    # model_state_dict = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune.pth")
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
+    dist.init_process_group(backend='nccl', init_method='env://', rank=0, world_size=1)
+    # model = torch.load(
+    #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth"
+    #     )
+    model = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth")
     # new_state_dict = {k[len("module."):]: v for k, v in model_state_dict.items()}
     # model.load_state_dict(new_state_dict)
-    # model = model.to("cuda")
-
-
-    model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
-    model_state_dict = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/initial_training.pth")
-    model.load_state_dict(model_state_dict)
     model = model.to("cuda")
+
+
+    # model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
+    # model_state_dict = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/initial_training.pth")
+    # model.load_state_dict(model_state_dict)
+    # model = model.to("cuda")
 
     for name, param in model.named_parameters():
         if "pretrained" in name or "depth_head.scratch.output_conv" in name:
@@ -168,8 +172,8 @@ def test(val_dataloader):
                     images.to(device),
                     mask.to(device),
                 )
-                
                 _, affordance_map_out = model(images, mask)
+                
                 affordance_map_out = affordance_map_out*mask.float()
                 affordance_max_value = torch.max(affordance_map_out.squeeze(0).squeeze(0))
                 affordance_coordiantes = torch.where(affordance_map_out.squeeze(0).squeeze(0) == affordance_max_value)
@@ -177,8 +181,10 @@ def test(val_dataloader):
                 # labels_max_value = torch.max(labels.squeeze(0).squeeze(0))
                 # labels_coordiantes = torch.where(labels.squeeze(0).squeeze(0) == labels_max_value)
                 raw_images = raw_images.cpu().detach().numpy()
-                resize_factor_x = 351 / 518
-                resize_factor_y = 360 / 518
+                shape_raw = raw_images[0].shape
+                resize_factor_x = shape_raw[0] / 518
+                resize_factor_y = shape_raw[1] / 518
+
                 cv2.circle(raw_images[0], (int(affordance_coordiantes[1].item()*resize_factor_x), int(affordance_coordiantes[0].item()*resize_factor_y)), 2, (0, 0, 255), -1)
                 # cv2.circle(raw_images[0], (int(labels_coordiantes[1].item()*resize_factor_x), int(labels_coordiantes[0].item()*resize_factor_x)), 2, (0, 255, 0), -1)
                 cv2.imshow("image", raw_images[0])

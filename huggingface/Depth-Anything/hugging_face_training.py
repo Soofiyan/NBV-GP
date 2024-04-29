@@ -143,6 +143,7 @@ class CustomDataset(Dataset):
             # For each folder_id within the run_ID directory
             for folder_id_path in glob.glob(os.path.join(run_id_path, "3F", "*")):
                 folder_id = os.path.basename(folder_id_path)
+                
                 # For each image file within the folder_id directory
                 for image_file in glob.glob(os.path.join(folder_id_path, "rgb*.jpg")):
                     # Derive the base name for the image file to match labels
@@ -156,6 +157,7 @@ class CustomDataset(Dataset):
                         folder_id,
                         f"affordance_map_*_{folder_id}_{count}.png",
                     )
+                    print(label_pattern)
                     # Find all matching label files and add to pairs
                     segmask_file = image_file.replace("rgb", "segmask").replace(".jpg", ".png")
                     for label_file in glob.glob(label_pattern):
@@ -173,21 +175,24 @@ class CustomDataset(Dataset):
         # Load image
         numpy_image = cv2.imread(image_file).astype(np.uint8)
         numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
-        plt.imshow(numpy_image)
-        plt.show()
         crop_bin_dim = [73, 287, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
+        plt.imshow(numpy_image)
+        plt.show()
         numpy_image = np.array(numpy_image).astype(np.float32) / 255.0
         image = (
             torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         )
+
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
 
         # Load label
         label = Image.open(label_file).convert("L")
         numpy_label = np.array(label)
+        plt.imshow(label)
+        plt.show()
         label = torch.from_numpy(numpy_label).unsqueeze(0).float().div(255)
         label = self.resize_transform(label)
 
@@ -196,6 +201,8 @@ class CustomDataset(Dataset):
         mask_id = match.group(1)
         numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
         mask = numpy_mask == int(mask_id)
+        plt.imshow(mask)
+        plt.show()
         mask = torch.from_numpy(mask).unsqueeze(0)
         mask = self.resize_transform(mask)
 
@@ -347,6 +354,7 @@ if __name__ == "__main__":
         labels_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/labels_nbv_3F",
     )
 
+    print(len(dataset))
     # Determine sizes for training and validation sets
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
@@ -355,10 +363,10 @@ if __name__ == "__main__":
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=12, shuffle=True, num_workers=4
+        train_dataset, batch_size=12, shuffle=True, num_workers=0
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=12, shuffle=False, num_workers=4
+        val_dataset, batch_size=12, shuffle=False, num_workers=0
     )
 
     # Example training loop

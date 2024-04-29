@@ -196,7 +196,6 @@ class CustomDataset(Dataset):
         mask = numpy_mask == int(mask_id)
         mask = torch.from_numpy(mask).unsqueeze(0)
         mask = self.resize_transform(mask)
-
         return image, label, mask
 
     def __len__(self):
