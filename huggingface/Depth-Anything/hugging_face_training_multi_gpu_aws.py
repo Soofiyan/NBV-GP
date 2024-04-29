@@ -203,12 +203,14 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
     sampler_train = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
     sampler_val = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
+    
+    local_batch_size = 64//world_size
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=12, sampler=sampler_train, num_workers=12
+        train_dataset, batch_size=local_batch_size, sampler=sampler_train, num_workers=128, pin_memory=True
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=12, sampler=sampler_val, num_workers=12
+        val_dataset, batch_size=local_batch_size, sampler=sampler_val, num_workers=128, pin_memory=True
     )
 
     num_epoch = 50
@@ -310,7 +312,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
 
-    images_root="/home/ubuntu/temp"
+    images_root="/home/ubuntu/compress_observation"
     labels_root="/home/ubuntu/labels_nbv_3F"
 
     
