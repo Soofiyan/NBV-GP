@@ -177,7 +177,7 @@ def init_model():
     #     filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-1
     # )
     optimizer = torch.optim.Adam(
-        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4
+        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3
     )
 
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=2)
@@ -213,22 +213,22 @@ def train(rank, world_size, images_root_path, labels_root_path):
         val_dataset, batch_size=local_batch_size, sampler=sampler_val, num_workers=128, pin_memory=True
     )
 
-    num_epoch = 50
+    num_epoch = 200
 
     model, criterion, optimizer, scheduler = init_model()
 
+        
+    # model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
+    
+    model = torch.load("/home/ubuntu/checkpoint_finetune2.pth")
     model.to(rank)
+
+
+
+    # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
-
-    # model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
-    
-    # model = torch.load(
-    #        "/home/ubuntu/checkpoint_finetune2.pth"
-    #     )
-
-    # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 
     running_loss = 0.0
 
@@ -291,7 +291,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             lowest_loss = avg_validation_loss
             torch.save(
             	model,
-               "/home/ubuntu/checkpoint_finetune2.pth",
+               "/home/ubuntu/checkpoint_finetune3.pth",
             )
         if(rank == 0):
             print(f"Validation Loss: {avg_validation_loss}")
