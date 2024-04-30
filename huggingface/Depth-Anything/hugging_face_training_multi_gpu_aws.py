@@ -219,8 +219,9 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
     # model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
     
-    checkpoint = torch.load("/home/ubuntu/checkpoint_finetune2.pth", map_location=lambda storage, loc: storage.cuda(rank))
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model = torch.load("/home/ubuntu/checkpoint_finetune2.pth", map_location=lambda storage, loc: storage.cuda(rank))
+    print(model.keys())
+    # model.load_state_dict(checkpoint['model_state_dict'])
 
     model.to(rank)
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
