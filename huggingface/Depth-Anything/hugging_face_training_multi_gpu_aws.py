@@ -166,7 +166,7 @@ def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
 
 def init_model():
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
-   
+    
     for name, param in model.named_parameters():
         if "pretrained" in name or "depth_head.scratch.output_conv" in name:
             param.requires_grad = False
@@ -217,11 +217,11 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
     model, criterion, optimizer, scheduler = init_model()
 
-    # model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
-    
     model = torch.load("/home/ubuntu/checkpoint_finetune2.pth", map_location=lambda storage, loc: storage.cuda(rank))
-    print(model.keys())
-    # model.load_state_dict(checkpoint['model_state_dict'])
+
+    # model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
+   
+    #  model.load_state_dict(checkpoint['model_state_dict'])
 
     model.to(rank)
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
@@ -310,7 +310,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
 
-    images_root="/home/ubuntu/compress_observation"
+    images_root="/home/ubuntu/temp"
     labels_root="/home/ubuntu/labels_nbv_3F"
 
     
