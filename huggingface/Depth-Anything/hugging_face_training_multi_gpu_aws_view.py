@@ -69,7 +69,7 @@ class CustomDataset(Dataset):
         self.labels_root = labels_root
 
         self.resize_transform = transforms.Resize(
-            (518, 518), interpolation=transforms.InterpolationMode.BICUBIC
+            (224, 224), interpolation=transforms.InterpolationMode.BICUBIC
         )
         self.normalize_transform = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -260,14 +260,14 @@ def train(rank, world_size, images_root_path, labels_root_path):
         train_dataset,
         batch_size=local_batch_size,
         sampler=sampler_train,
-        num_workers=128,
+        num_workers=64,
         pin_memory=True,
     )
     val_dataloader = DataLoader(
         val_dataset,
         batch_size=local_batch_size,
         sampler=sampler_val,
-        num_workers=128,
+        num_workers=64,
         pin_memory=True,
     )
 
@@ -275,10 +275,11 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
     model, criterion, optimizer, scheduler = init_model()
 
-    model = torch.load(
-        "/home/ubuntu/checkpoint_finetune2.pth",
-        map_location=lambda storage, loc: storage.cuda(rank),
-    )
+    # model = torch.load(
+    #     "/home/ubuntu/checkpoint_finetune2.pth",
+    #     map_location=lambda storage, loc: storage.cuda(rank),
+    # )
+    # model = model.module
 
     model.to(rank)
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)

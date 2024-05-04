@@ -43,7 +43,7 @@ class CustomDataset(Dataset):
         self.labels_root = labels_root
 
         self.resize_transform = transforms.Resize(
-            (518, 518), interpolation=transforms.InterpolationMode.BICUBIC
+            (224, 224), interpolation=transforms.InterpolationMode.BICUBIC
         )
         self.normalize_transform = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -95,7 +95,7 @@ class CustomDataset(Dataset):
         crop_bin_dim = [73, 287, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
-        numpy_image = np.array(numpy_image).astype(np.float32) / 255.0
+        numpy_image = np.array(numpy_image).astype(np.float32)
         image = (
             torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         )
@@ -207,10 +207,10 @@ def train(rank, world_size, images_root_path, labels_root_path):
     local_batch_size = 64//world_size
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=local_batch_size, sampler=sampler_train, num_workers=128, pin_memory=True
+        train_dataset, batch_size=local_batch_size, sampler=sampler_train, num_workers=64, pin_memory=True
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=local_batch_size, sampler=sampler_val, num_workers=128, pin_memory=True
+        val_dataset, batch_size=local_batch_size, sampler=sampler_val, num_workers=64, pin_memory=True
     )
 
     num_epoch = 200
@@ -218,7 +218,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
     model, criterion, optimizer, scheduler = init_model()
 
     model = torch.load("/home/ubuntu/checkpoint_finetune2.pth", map_location=lambda storage, loc: storage.cuda(rank))
-
+    model = model.module
     # model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
    
     #  model.load_state_dict(checkpoint['model_state_dict'])
@@ -305,12 +305,12 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
 if __name__ == "__main__":
     # Set the start method to 'spawn'
-    # mp.set_start_method("spawn", force=True)
+    mp.set_start_method("fork")
 
     world_size = torch.cuda.device_count()
 
 
-    images_root="/home/ubuntu/temp"
+    images_root="/home/ubuntu/compress_observation"
     labels_root="/home/ubuntu/labels_nbv_3F"
 
     
