@@ -95,7 +95,7 @@ class CustomDataset(Dataset):
         crop_bin_dim = [73, 287, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
-        numpy_image = np.array(numpy_image).astype(np.float32) / 255.0
+        numpy_image = np.array(numpy_image).astype(np.float32)
         image = (
             torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         )
@@ -184,7 +184,7 @@ def init_model():
     #     filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-1
     # )
     optimizer = torch.optim.Adam(
-        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4
+        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3
     )
 
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=2)

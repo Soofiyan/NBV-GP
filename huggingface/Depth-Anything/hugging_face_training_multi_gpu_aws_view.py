@@ -69,7 +69,7 @@ class CustomDataset(Dataset):
         self.labels_root = labels_root
 
         self.resize_transform = transforms.Resize(
-            (518, 518), interpolation=transforms.InterpolationMode.BICUBIC
+            (224, 224), interpolation=transforms.InterpolationMode.BICUBIC
         )
         self.normalize_transform = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -139,7 +139,7 @@ class CustomDataset(Dataset):
         crop_bin_dim = self.crop_bin_dim_dict[str(view_number)]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
-        numpy_image = np.array(numpy_image).astype(np.float32) / 255.0
+        numpy_image = np.array(numpy_image).astype(np.float32)
         image = torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
@@ -226,7 +226,7 @@ def init_model():
         filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3
     )
 
-    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=2)
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=5)
 
     return model, criterion, optimizer, scheduler
 
@@ -239,6 +239,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
         images_root=images_root_path,
         labels_root=labels_root_path,
     )
+    print(len(dataset))
 
     # Determine sizes for training and validation sets
     train_size = int(0.8 * len(dataset))
@@ -254,20 +255,20 @@ def train(rank, world_size, images_root_path, labels_root_path):
         val_dataset, num_replicas=world_size, rank=rank, shuffle=False
     )
 
-    local_batch_size = 64 // world_size
+    local_batch_size = 32
 
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=local_batch_size,
         sampler=sampler_train,
-        num_workers=128,
+        num_workers=64,
         pin_memory=True,
     )
     val_dataloader = DataLoader(
         val_dataset,
         batch_size=local_batch_size,
         sampler=sampler_val,
-        num_workers=128,
+        num_workers=64,
         pin_memory=True,
     )
 
@@ -275,10 +276,11 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
     model, criterion, optimizer, scheduler = init_model()
 
-    model = torch.load(
-        "/home/ubuntu/checkpoint_finetune2.pth",
-        map_location=lambda storage, loc: storage.cuda(rank),
-    )
+    # model = torch.load(
+    #     "/home/ubuntu/checkpoint_finetune2.pth",
+    #     map_location=lambda storage, loc: storage.cuda(rank),
+    # )
+    # model = model.module
 
     model.to(rank)
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)
@@ -289,7 +291,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
     model.train()
 
-    lowest_loss = float("inf")
+    lowest_loss = 100000.0
 
     for epoch in range(num_epoch):
         running_loss = 0.0
@@ -344,7 +346,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             lowest_loss = avg_validation_loss
             torch.save(
                 model,
-                "/home/ubuntu/checkpoint_finetune3.pth",
+                "/home/ubuntu/checkpoint_finetune_lr_2.pth",
             )
         if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
