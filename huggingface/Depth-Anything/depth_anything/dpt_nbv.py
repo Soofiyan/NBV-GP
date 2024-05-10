@@ -197,6 +197,7 @@ class DPTHead(nn.Module):
         ######################################################################################################
         ######################################################################################################
         ######################################################################################################
+
         self.scratch.affordance_initial_conv = nn.Conv2d(
             head_features_1 + 1, head_features_1 // 2, kernel_size=3, padding=1
         )
@@ -247,12 +248,18 @@ class DPTHead(nn.Module):
         )
 
         self.scratch.affordance_final_conv = nn.Conv2d(
-            head_features_1 + 1, 4, kernel_size=1, stride=1
+            head_features_2, 1, kernel_size=1, stride=1
         )
-        self.scratch.affordance_sigmoid = nn.Sigmoid()
 
-        # Global Average Pooling to reduce each 6x296x296 map to 6x1x1
-        self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+
+        self.scratch.nbv_adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        self.scratch.flatten = nn.Flatten()
+        self.scratch.nbv_fc1 = nn.Linear(224*224, 512)  # You can adjust the size and number of these layers
+        self.scratch.nbv_fc2 = nn.Linear(512, 2)  # Outputs two coordinates (x, y)
+        self.scratch.nbv_relu = nn.ReLU()
+
+        self.scratch.affordance_sigmoid = nn.Sigmoid()
 
     def forward(self, out_features, patch_h, patch_w, mask):
         out = []
@@ -293,33 +300,37 @@ class DPTHead(nn.Module):
         out = self.scratch.output_conv2(out)
 
         seg_mask_resized = F.interpolate(
-            mask.float(), size=path_1.shape[2:], mode="nearest" 
+            mask.float(), size=path_1.shape[2:], mode="nearest"
         )
 
         # Concatenate the segmentation mask with patch_1 features
         patch_1_with_mask = torch.cat((path_1, seg_mask_resized), dim=1)
 
-        # x = self.scratch.affordance_initial_conv(patch_1_with_mask)
-        # x = self.scratch.affordance_initial_bn(x)
-        # x = self.scratch.affordance_relu(x)
-        # x = self.scratch.affordance_attention(x)  # Apply simplified self-attention here
+        x = self.scratch.affordance_initial_conv(patch_1_with_mask)
+        x = self.scratch.affordance_initial_bn(x)
+        x = self.scratch.affordance_relu(x)
+        x = self.scratch.affordance_attention(x)  # Apply simplified self-attention here
 
-        # x = F.interpolate(
-        #     x,
-        #     size=(int(patch_h * 14), int(patch_w * 14)),
-        #     mode="bilinear",
-        #     align_corners=True,
-        # )
+        x = F.interpolate(
+            x,
+            size=(int(patch_h * 14), int(patch_w * 14)),
+            mode="bilinear",
+            align_corners=True,
+        )
 
-        # x = self.scratch.affordance_feature_extraction_extended(x)
-        # # x = self.scratch.affordance_feature_extraction(x)
+        x = self.scratch.affordance_feature_extraction_extended(x)
+        # x = self.scratch.affordance_feature_extraction(x)
 
-        x = self.scratch.affordance_final_conv(patch_1_with_mask)
-
-        x = self.global_avg_pool(x)
-        nbv = x.view(x.size(0), -1).type(torch.float32)
+        x = self.scratch.affordance_final_conv(x)
+        x = self.scratch.affordance_sigmoid(x)
+        x = self.scratch.flatten(x)
         
-        return out, nbv
+        # Fully connected layers
+        x = self.scratch.nbv_fc1(x)
+        x = self.scratch.nbv_relu(x)  # Using ReLU for non-linearity
+        nbv = self.scratch.nbv_fc2(x)
+
+        return nbv
 
 
 class DPT_DINOv2(nn.Module):
@@ -370,11 +381,9 @@ class DPT_DINOv2(nn.Module):
 
         patch_h, patch_w = h // 14, w // 14
 
-        depth, nbv = self.depth_head(features, patch_h, patch_w, mask)
-        depth = F.interpolate(depth, size=(h, w), mode="bilinear", align_corners=True)
-        depth = F.relu(depth)
-        
-        return depth, nbv
+        nbv = self.depth_head(features, patch_h, patch_w, mask)
+
+        return nbv
 
 
 class DepthAnything(DPT_DINOv2, PyTorchModelHubMixin):

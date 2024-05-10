@@ -51,6 +51,24 @@ class CustomDataset(Dataset):
 
         self.image_label_pairs = self._get_image_label_pairs()
 
+        self.crop_bin_dim_dict = {
+            "0": [(239, 102), (465, 112), (447, 295), (237, 307)],
+            "1": [(225, 100), (463, 107), (447, 299), (227, 309)],
+            "2": [(193, 102), (447, 102), (437, 305), (206, 308)],
+            "3": [(179, 109), (415, 100), (415, 309), (194, 299)],
+            "4": [(176, 113), (401, 102), (406, 309), (194, 296)],
+            "5": [(239, 69), (465, 85), (463, 276), (238, 291)],
+            "6": [(224, 71), (460, 81), (460, 281), (223, 294)],
+            "7": [(196, 74), (443, 72), (445, 291), (197, 294)],
+            "8": [(180, 82), (416, 71), (416, 294), (182, 285)],
+            "9": [(178, 90), (402, 73), (405, 294), (180, 278)],
+            "10": [(236, 55), (447, 68), (465, 250), (238, 262)],
+            "11": [(225, 54), (447, 64), (464, 256), (224, 260)],
+            "12": [(203, 55), (436, 54), (447, 259), (194, 259)],
+            "13": [(192, 64), (414, 55), (414, 262), (175, 255)],
+            "14": [(192, 71), (402, 54), (402, 263), (175, 253)],
+        }
+
         self.pattern = r"affordance_map_(\d+)_"
 
     def _get_image_label_pairs(self):
@@ -63,7 +81,7 @@ class CustomDataset(Dataset):
             for folder_id_path in glob.glob(os.path.join(run_id_path, "3F", "*")):
                 folder_id = os.path.basename(folder_id_path)
                 # For each image file within the folder_id directory
-                for image_file in glob.glob(os.path.join(folder_id_path, "rgb*.jpg")):
+                for image_file in glob.glob(os.path.join(folder_id_path, "rgb*.png")):
                     # Derive the base name for the image file to match labels
                     base_name = os.path.splitext(os.path.basename(image_file))[0]
                     count = base_name.split("_")[-1]
@@ -76,12 +94,12 @@ class CustomDataset(Dataset):
                         f"affordance_map_*_{folder_id}_{count}.png",
                     )
                     # Find all matching label files and add to pairs
-                    segmask_file = image_file.replace("rgb", "segmask").replace(".jpg", ".png")
+                    segmask_file = image_file.replace("rgb", "segmask").replace(
+                        ".jpg", ".png"
+                    )
                     for label_file in glob.glob(label_pattern):
                         label_img = Image.open(label_file).convert("L")
-                        if (
-                            np.any(np.array(label_img) > 0)
-                        ):
+                        if np.any(np.array(label_img) > 0):
                             pairs.append((image_file, label_file, segmask_file))
                         # pairs.append((image_file, label_file, segmask_file))
         return pairs
@@ -96,9 +114,7 @@ class CustomDataset(Dataset):
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
         numpy_image = np.array(numpy_image).astype(np.float32) / 255.0
-        image = (
-            torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
-        )
+        image = torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
 
@@ -140,13 +156,15 @@ def save_plot(label, affordance_map, mask, epoch):
 
 
 def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
+
 def cleanup():
     dist.destroy_process_group()
+
 
 def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
     # Calculate the errors
@@ -155,7 +173,7 @@ def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
     weights = 1 / (torch.abs(errors) + epsilon)
     # Calculate Huber loss
     is_small_error = torch.abs(errors) < delta
-    squared_loss = 0.5 * (errors ** 2)
+    squared_loss = 0.5 * (errors**2)
     linear_loss = delta * (torch.abs(errors) - 0.5 * delta)
     # Combine using a mask
     huber_loss = torch.where(is_small_error, squared_loss, linear_loss)
@@ -164,14 +182,15 @@ def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
     loss = torch.mean(weighted_huber)
     return loss
 
+
 def init_model():
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
-   
+
     for name, param in model.named_parameters():
         if "pretrained" in name or "depth_head.scratch.output_conv" in name:
             param.requires_grad = False
         # print(name, param.requires_grad)
-    
+
     criterion = torch.nn.HuberLoss()
     # optimizer = torch.optim.AdamW(
     #     filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-1
@@ -201,14 +220,28 @@ def train(rank, world_size, images_root_path, labels_root_path):
     # Split the dataset into training and validation sets
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    sampler_train = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
-    sampler_val = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
+    sampler_train = DistributedSampler(
+        train_dataset, num_replicas=world_size, rank=rank, shuffle=True
+    )
+    sampler_val = DistributedSampler(
+        val_dataset, num_replicas=world_size, rank=rank, shuffle=False
+    )
+
+    local_batch_size = 64 // world_size
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=12, sampler=sampler_train, num_workers=12
+        train_dataset,
+        batch_size=local_batch_size,
+        sampler=sampler_train,
+        num_workers=128,
+        pin_memory=True,
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=12, sampler=sampler_val, num_workers=12
+        val_dataset,
+        batch_size=local_batch_size,
+        sampler=sampler_val,
+        num_workers=128,
+        pin_memory=True,
     )
 
     num_epoch = 50
@@ -219,9 +252,8 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
-
     # model = DDP(model, device_ids=[rank], bucket_cap_mb=25, find_unused_parameters=True)
-    
+
     # model = torch.load(
     #        "/home/ubuntu/checkpoint_finetune2.pth"
     #     )
@@ -244,12 +276,12 @@ def train(rank, world_size, images_root_path, labels_root_path):
         for images, labels, mask in train_dataloader:
             images, labels, mask = images.to(rank), labels.to(rank), mask.to(rank)
             optimizer.zero_grad()
-            
+
             depth_out, affordance_map_out = model(images, mask)
 
             # weighted_loss = weighted_huber_loss(affordance_map_out, labels)
             # scaled_loss = weighted_loss * scaling_factor
-            
+
             loss = criterion(affordance_map_out, labels)
             scaled_loss = loss * scaling_factor
 
@@ -261,7 +293,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             # print(f"Loss: {loss.item()}")
 
         epoch_loss = running_loss / len(train_dataloader)
-        if(rank == 0):
+        if rank == 0:
             print(f"Epoch {epoch + 1}, Loss: {epoch_loss}")
 
         model.eval()  # Set the model to evaluation mode
@@ -277,7 +309,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
                 _, affordance_map_out = model(images, mask)
                 # weighted_loss = weighted_huber_loss(affordance_map_out, labels)
                 # scaled_loss = weighted_loss * scaling_factor
-                
+
                 loss = criterion(affordance_map_out, labels)
                 scaled_loss = loss * scaling_factor
 
@@ -288,10 +320,10 @@ def train(rank, world_size, images_root_path, labels_root_path):
         if rank == 0 and avg_validation_loss < lowest_loss:
             lowest_loss = avg_validation_loss
             torch.save(
-            	model,
-               "/home/ubuntu/checkpoint_finetune2.pth",
+                model,
+                "/home/ubuntu/checkpoint_finetune2.pth",
             )
-        if(rank == 0):
+        if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
 
         save_plot(labels[0], affordance_map_out[0], mask[0], epoch)
@@ -299,7 +331,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
         model.train()
 
         scheduler.step(avg_validation_loss)
-    
+
     cleanup()
 
 
@@ -309,13 +341,12 @@ if __name__ == "__main__":
 
     world_size = torch.cuda.device_count()
 
-
-    images_root="/home/ubuntu/temp"
-    labels_root="/home/ubuntu/labels_nbv_3F"
-
-    
+    images_root = "/home/ubuntu/compress_observation"
+    labels_root = "/home/ubuntu/labels_nbv_3F"
 
     # Example training loop
-    mp.spawn(train, args=(world_size, images_root, labels_root), nprocs=world_size, join=True)
+    mp.spawn(
+        train, args=(world_size, images_root, labels_root), nprocs=world_size, join=True
+    )
 
     # train(rank, world_size, train_dataloader, val_dataloader)

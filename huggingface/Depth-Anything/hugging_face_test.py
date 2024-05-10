@@ -41,7 +41,7 @@ class CustomDataset(Dataset):
         self.labels_root = labels_root
 
         self.resize_transform = transforms.Resize(
-            (518, 518), interpolation=transforms.InterpolationMode.BICUBIC
+            (224, 224), interpolation=transforms.InterpolationMode.BICUBIC
         ).to("cuda")
         self.normalize_transform = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -89,13 +89,13 @@ class CustomDataset(Dataset):
 
         # Load image
         numpy_image = np.load(image_file).astype(np.uint8)
-        # numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
+        numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
         
         crop_bin_dim = [73, 290, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
         raw_image = numpy_image
-        numpy_image = np.array(numpy_image).astype(np.float32) / 255.0
+        numpy_image = np.array(numpy_image).astype(np.float32)
         image = (
             torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255).to("cuda")
         )
@@ -172,26 +172,27 @@ def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
 
 def init_model():
 
-    # os.environ['MASTER_ADDR'] = 'localhost'
-    # os.environ['MASTER_PORT'] = '12355'
-    # model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
-    # dist.init_process_group(backend='nccl', init_method='env://', rank=0, world_size=1)
-    # # model = torch.load(
-    # #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth"
-    # #     )
-    # model = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth")
-    # # new_state_dict = {k[len("module."):]: v for k, v in model_state_dict.items()}
-    # # model.load_state_dict(new_state_dict)
-    # model = model.to("cuda")
-
-
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
-    model.load_state_dict(
-        torch.load(
-            "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/initial_training.pth"
-        )
-    )
+    dist.init_process_group(backend='nccl', init_method='env://', rank=0, world_size=1)
+    # model = torch.load(
+    #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune2.pth"
+    #     )
+    model = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune_multi_view.pth")
+    # new_state_dict = {k[len("module."):]: v for k, v in model_state_dict.items()}
+    # model.load_state_dict(new_state_dict)
     model = model.to("cuda")
+    model = model.module
+
+
+    # model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
+    # model.load_state_dict(
+    #     torch.load(
+    #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_local_gpu.pth"
+    #     )
+    # )
+    # model = model.to("cuda")
 
     for name, param in model.named_parameters():
         if "pretrained" in name or "depth_head.scratch.output_conv" in name:
@@ -214,32 +215,29 @@ def test(val_dataloader):
     model.eval()  # Set the model to evaluation mode
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    for _ in range(10):
-        with torch.no_grad():  # Disable gradient computation
-            for raw_images, images, labels, mask in val_dataloader:
-                images, labels, mask = (
-                    images.to(device),
-                    labels.to(device),
-                    mask.to(device),
-                )
-                _, affordance_map_out = model(images, mask)
-                affordance_max_value = torch.max(affordance_map_out.squeeze(0).squeeze(0))
-                affordance_coordiantes = torch.where(affordance_map_out.squeeze(0).squeeze(0) == affordance_max_value)
+    with torch.no_grad():  # Disable gradient computation
+        for raw_images, images, labels, mask in val_dataloader:
+            images, labels, mask = (
+                images.to(device),
+                labels.to(device),
+                mask.to(device),
+            )
+            _, affordance_map_out = model(images, mask)
+            affordance_max_value = torch.max(affordance_map_out.squeeze(0).squeeze(0))
+            affordance_coordiantes = torch.where(affordance_map_out.squeeze(0).squeeze(0) == affordance_max_value)
 
-                labels_max_value = torch.max(labels.squeeze(0).squeeze(0))
-                labels_coordiantes = torch.where(labels.squeeze(0).squeeze(0) == labels_max_value)
-                print(labels_coordiantes, affordance_coordiantes)
-                plt.imshow(affordance_map_out.squeeze(0).squeeze(0).detach().cpu().numpy())
-                plt.show()
-                raw_images = raw_images.cpu().detach().numpy()
-                image_size = raw_images[0].shape
-                resize_factor_x = image_size[0] / 518
-                resize_factor_y = image_size[1] / 518
-                cv2.circle(raw_images[0], (int(affordance_coordiantes[1].item()*resize_factor_y), int(affordance_coordiantes[0].item()*resize_factor_x)), 2, (0, 0, 255), -1)
-                cv2.circle(raw_images[0], (int(labels_coordiantes[1].item()*resize_factor_y), int(labels_coordiantes[0].item()*resize_factor_x)), 2, (0, 255, 0), -1)
-                cv2.imshow("image", raw_images[0])
-                cv2.waitKey(0)
-                view_plot(labels[0], affordance_map_out[0], mask[0])
+            labels_max_value = torch.max(labels.squeeze(0).squeeze(0))
+            labels_coordiantes = torch.where(labels.squeeze(0).squeeze(0) == labels_max_value)
+            raw_images = raw_images.cpu().detach().numpy()[0]
+            raw_images = cv2.resize(raw_images, (224, 224))
+            shape_raw = raw_images.shape
+            resize_factor_x = shape_raw[0] / 224
+            resize_factor_y = shape_raw[1] / 224
+            cv2.circle(raw_images, (int(affordance_coordiantes[1].item()*resize_factor_y), int(affordance_coordiantes[0].item()*resize_factor_x)), 2, (0, 0, 255), -1)
+            cv2.circle(raw_images, (int(labels_coordiantes[1].item()*resize_factor_y), int(labels_coordiantes[0].item()*resize_factor_x)), 2, (0, 255, 0), -1)
+            cv2.imshow("image", raw_images)
+            cv2.waitKey(0)
+            view_plot(labels[0], affordance_map_out[0], mask[0])
 
 
 if __name__ == "__main__":

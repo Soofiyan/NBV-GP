@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 
-from depth_anything.blocks import FeatureFusionBlock, _make_scratch, LoRAConv2d
+from depth_anything.blocks import FeatureFusionBlock, _make_scratch
 import numpy as np
 from torchvision.transforms import Compose
 from depth_anything.util.transform import Resize, NormalizeImage, PrepareForNet
@@ -172,85 +172,33 @@ class DPTHead(nn.Module):
         head_features_1 = features
         head_features_2 = 32
 
-        self.scratch.output_conv1 = nn.Conv2d(
-            head_features_1,
-            head_features_1 // 2,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-        )
-
-        self.scratch.output_conv2 = nn.Sequential(
-            nn.Conv2d(
-                head_features_1 // 2,
-                head_features_2,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
-            nn.ReLU(True),
-            nn.Conv2d(head_features_2, 1, kernel_size=1, stride=1, padding=0),
-            nn.ReLU(True),
-            nn.Identity(),
-        )
-
-        ######################################################################################################
-        ######################################################################################################
         ######################################################################################################
 
-        self.scratch.affordance_initial_conv = nn.Conv2d(
-            head_features_1 + 1, head_features_1 // 2, kernel_size=3, padding=1
-        )
-        self.scratch.affordance_initial_bn = nn.BatchNorm2d(head_features_1 // 2)
-        self.scratch.affordance_relu = nn.ReLU(inplace=True)
-
-        # Adding simplified self-attention
-        self.scratch.affordance_attention = SelfAttention(head_features_1 // 2)
-
-        self.scratch.affordance_feature_extraction = nn.Sequential(
+        # Simplified NBV initial convolution sequence with reduced feature size
+        self.scratch.nbv_initial_conv = nn.Sequential(
             nn.Conv2d(
-                head_features_1 // 2,
-                head_features_2,
+                head_features_1 + 1,  # +2 for the segmentation mask and affordance map
+                512,  # Reduced number of output channels
                 kernel_size=3,
-                stride=1,
                 padding=1,
+                bias=False
             ),
-            nn.BatchNorm2d(head_features_2),
+            nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=0.3),  # Helps prevent overfitting
-            nn.Conv2d(
-                head_features_2, head_features_2 * 2, kernel_size=3, stride=1, padding=1
-            ),
-            nn.BatchNorm2d(head_features_2 * 2),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=0.3),  # Added another dropout layer
-            # Adding additional layers
-            nn.Conv2d(
-                head_features_2 * 2,
-                head_features_2 * 2,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
-            nn.BatchNorm2d(head_features_2 * 2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(
-                head_features_2 * 2, head_features_2, kernel_size=3, stride=1, padding=1
-            ),  # Reducing channel size back
-            nn.BatchNorm2d(head_features_2),
-            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2)
         )
 
-        self.scratch.affordance_feature_extraction_extended = nn.Sequential(
-            self.scratch.affordance_feature_extraction,
-            ResidualBlock(head_features_2),
-            ResidualBlock(head_features_2),
-        )
+        # Simplified residual block with fewer features
+        self.scratch.nbv_resnet_block = ResidualBlock(512)
 
-        self.scratch.affordance_final_conv = nn.Conv2d(
-            head_features_2, 1, kernel_size=1, stride=1
-        )
-        self.scratch.affordance_sigmoid = nn.Sigmoid()
+        # Average pooling and dropout for regularization
+        self.scratch.nbv_adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.scratch.nbv_dropout = nn.Dropout(p=0.2)  # Adjusted dropout rate
+        self.scratch.nbv_fc1 = nn.Linear(512, 64)  # Output feature reduction
+        self.scratch.nbv_fc2 = nn.Linear(64, 2)  # Output feature reduction
+
+        self.scratch.sigmoid = nn.Sigmoid()
+
 
     def forward(self, out_features, patch_h, patch_w, mask):
         out = []
@@ -281,43 +229,23 @@ class DPTHead(nn.Module):
         path_2 = self.scratch.refinenet2(path_3, layer_2_rn, size=layer_1_rn.shape[2:])
         path_1 = self.scratch.refinenet1(path_2, layer_1_rn)
 
-        out = self.scratch.output_conv1(path_1)
-        out = F.interpolate(
-            out,
-            (int(patch_h * 14), int(patch_w * 14)),
-            mode="bilinear",
-            align_corners=True,
-        )
-        out = self.scratch.output_conv2(out)
-
         seg_mask_resized = F.interpolate(
             mask.float(), size=path_1.shape[2:], mode="nearest"
         )
 
-        # Concatenate the segmentation mask with patch_1 features
-        patch_1_with_mask = torch.cat((path_1, seg_mask_resized), dim=1)
+        path_with_mask = torch.cat((path_1, seg_mask_resized), dim=1)
 
-        x = self.scratch.affordance_initial_conv(patch_1_with_mask)
-        x = self.scratch.affordance_initial_bn(x)
-        x = self.scratch.affordance_relu(x)
-        x = self.scratch.affordance_attention(x)  # Apply simplified self-attention here
-
-        x = F.interpolate(
-            x,
-            size=(int(patch_h * 14), int(patch_w * 14)),
-            mode="bilinear",
-            align_corners=True,
-        )
-
-        x = self.scratch.affordance_feature_extraction_extended(x)
-        # x = self.scratch.affordance_feature_extraction(x)
-
-        x = self.scratch.affordance_final_conv(x)
-        affordance_out = self.scratch.affordance_sigmoid(x)
-        affordance_out = affordance_out * mask.float()
-
-        return out, affordance_out
-
+        x = self.scratch.nbv_initial_conv(path_with_mask)
+        x = self.scratch.nbv_resnet_block(x)
+        x = self.scratch.nbv_adaptive_pool(x)
+        x = x.view(x.size(0), -1)
+        # x = self.scratch.nbv_dropout(x)
+        x = F.relu(self.scratch.nbv_fc1(x))
+        nbv = F.relu(self.scratch.nbv_fc2(x))
+        # nbv = self.scratch.sigmoid(nbv)
+        # _, nbv = torch.max(nbv, dim=1)
+        # nbv = nbv.squeeze(1)
+        return nbv
 
 class DPT_DINOv2(nn.Module):
     def __init__(
@@ -367,16 +295,8 @@ class DPT_DINOv2(nn.Module):
 
         patch_h, patch_w = h // 14, w // 14
 
-        depth, affordance_map = self.depth_head(features, patch_h, patch_w, mask)
-        depth = F.interpolate(depth, size=(h, w), mode="bilinear", align_corners=True)
-        depth = F.relu(depth)
-
-        affordance_map = F.interpolate(
-            affordance_map, size=(h, w), mode="bilinear", align_corners=True
-        )
-        affordance_map = F.relu(affordance_map)
-
-        return depth, affordance_map
+        nbv = self.depth_head(features, patch_h, patch_w, mask)
+        return nbv
 
 
 class DepthAnything(DPT_DINOv2, PyTorchModelHubMixin):

@@ -5,9 +5,15 @@ import torch.nn.functional as F
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 
 from depth_anything.blocks import FeatureFusionBlock, _make_scratch
+import numpy as np
+from torchvision.transforms import Compose
+from depth_anything.util.transform import Resize, NormalizeImage, PrepareForNet
+import cv2
+
+import math
 
 
-def _make_fusion_block(features, use_bn, size=None):
+def _make_fusion_block(features, use_bn, rank=10, size=None):
     return FeatureFusionBlock(
         features,
         nn.ReLU(False),
@@ -17,6 +23,73 @@ def _make_fusion_block(features, use_bn, size=None):
         align_corners=True,
         size=size,
     )
+
+
+class SelfAttention(nn.Module):
+    """Implements a simple self-attention mechanism."""
+
+    def __init__(self, in_channels, reduce_factor=4):
+        super(SelfAttention, self).__init__()
+        self.reduce_factor = reduce_factor
+        self.query_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        # Downsample
+        x_downsampled = F.interpolate(
+            x, scale_factor=1 / self.reduce_factor, mode="bilinear", align_corners=False
+        )
+        batch_size, C, height, width = x_downsampled.size()
+
+        query = (
+            self.query_conv(x_downsampled)
+            .view(batch_size, -1, height * width)
+            .permute(0, 2, 1)
+        )
+        key = self.key_conv(x_downsampled).view(batch_size, -1, height * width)
+        value = (
+            self.value_conv(x_downsampled)
+            .view(batch_size, -1, height * width)
+            .permute(0, 2, 1)
+        )
+
+        attention = self.softmax(torch.bmm(query, key))
+        out = torch.bmm(attention, value)
+        out = out.permute(0, 2, 1).view(batch_size, C, height, width)
+
+        # Upsample to original size
+        out_upsampled = F.interpolate(
+            out, size=(x.size(2), x.size(3)), mode="bilinear", align_corners=False
+        )
+
+        return out_upsampled + x
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(
+            in_channels, in_channels, kernel_size=3, padding=1, stride=1
+        )
+        self.bn1 = nn.BatchNorm2d(in_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(
+            in_channels, in_channels, kernel_size=3, padding=1, stride=1
+        )
+        self.bn2 = nn.BatchNorm2d(in_channels)
+
+    def forward(self, x):
+        residual = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out += residual
+        out = self.relu(out)
+        return out
 
 
 class DPTHead(nn.Module):
@@ -33,11 +106,12 @@ class DPTHead(nn.Module):
 
         self.nclass = nclass
         self.use_clstoken = use_clstoken
+        self.combined_in_channels = in_channels + 0
 
         self.projects = nn.ModuleList(
             [
                 nn.Conv2d(
-                    in_channels=in_channels,
+                    in_channels=self.combined_in_channels,
                     out_channels=out_channel,
                     kernel_size=1,
                     stride=1,
@@ -46,7 +120,7 @@ class DPTHead(nn.Module):
                 for out_channel in out_channels
             ]
         )
-
+        
         self.resize_layers = nn.ModuleList(
             [
                 nn.ConvTranspose2d(
@@ -90,47 +164,15 @@ class DPTHead(nn.Module):
 
         self.scratch.stem_transpose = None
 
-        self.scratch.refinenet1 = _make_fusion_block(features, use_bn)
-        self.scratch.refinenet2 = _make_fusion_block(features, use_bn)
-        self.scratch.refinenet3 = _make_fusion_block(features, use_bn)
-        self.scratch.refinenet4 = _make_fusion_block(features, use_bn)
+        self.scratch.refinenet1 = _make_fusion_block(features, use_bn, rank=100)
+        self.scratch.refinenet2 = _make_fusion_block(features, use_bn, rank=100)
+        self.scratch.refinenet3 = _make_fusion_block(features, use_bn, rank=100)
+        self.scratch.refinenet4 = _make_fusion_block(features, use_bn, rank=100)
 
         head_features_1 = features
         head_features_2 = 32
 
-        if nclass > 1:
-            self.scratch.output_conv = nn.Sequential(
-                nn.Conv2d(
-                    head_features_1, head_features_1, kernel_size=3, stride=1, padding=1
-                ),
-                nn.ReLU(True),
-                nn.Conv2d(head_features_1, nclass, kernel_size=1, stride=1, padding=0),
-            )
-        else:
-            self.scratch.output_conv1 = nn.Conv2d(
-                head_features_1,
-                head_features_1 // 2,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-
-            self.scratch.output_conv2 = nn.Sequential(
-                nn.Conv2d(
-                    head_features_1 // 2,
-                    head_features_2,
-                    kernel_size=3,
-                    stride=1,
-                    padding=1,
-                ),
-                nn.ReLU(True),
-                nn.Conv2d(head_features_2, 1, kernel_size=1, stride=1, padding=0),
-                nn.ReLU(True),
-                nn.Identity(),
-            )
-
-        # This is for affordance map
-        self.scratch.affordance_output_conv1 = nn.Conv2d(
+        self.scratch.output_conv1 = nn.Conv2d(
             head_features_1,
             head_features_1 // 2,
             kernel_size=3,
@@ -138,7 +180,7 @@ class DPTHead(nn.Module):
             padding=1,
         )
 
-        self.scratch.affordance_output_conv2 = nn.Sequential(
+        self.scratch.output_conv2 = nn.Sequential(
             nn.Conv2d(
                 head_features_1 // 2,
                 head_features_2,
@@ -152,7 +194,65 @@ class DPTHead(nn.Module):
             nn.Identity(),
         )
 
-    def forward(self, out_features, patch_h, patch_w):
+        ######################################################################################################
+        ######################################################################################################
+        ######################################################################################################
+
+        self.scratch.affordance_initial_conv = nn.Conv2d(
+            head_features_1 + 1, head_features_1 // 2, kernel_size=3, padding=1
+        )
+        self.scratch.affordance_initial_bn = nn.BatchNorm2d(head_features_1 // 2)
+        self.scratch.affordance_relu = nn.ReLU(inplace=True)
+
+        # Adding simplified self-attention
+        self.scratch.affordance_attention = SelfAttention(head_features_1 // 2)
+
+        self.scratch.affordance_feature_extraction = nn.Sequential(
+            nn.Conv2d(
+                head_features_1 // 2,
+                head_features_2,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm2d(head_features_2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),  # Helps prevent overfitting
+            nn.Conv2d(
+                head_features_2, head_features_2 * 2, kernel_size=3, stride=1, padding=1
+            ),
+            nn.BatchNorm2d(head_features_2 * 2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),  # Added another dropout layer
+            # Adding additional layers
+            nn.Conv2d(
+                head_features_2 * 2,
+                head_features_2 * 2,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm2d(head_features_2 * 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                head_features_2 * 2, head_features_2, kernel_size=3, stride=1, padding=1
+            ),  # Reducing channel size back
+            nn.BatchNorm2d(head_features_2),
+            nn.ReLU(inplace=True),
+        )
+
+        self.scratch.affordance_feature_extraction_extended = nn.Sequential(
+            self.scratch.affordance_feature_extraction,
+            ResidualBlock(head_features_2),
+            ResidualBlock(head_features_2),
+        )
+
+        self.scratch.affordance_final_conv = nn.Conv2d(
+            head_features_2, 1, kernel_size=1, stride=1
+        )
+        self.scratch.affordance_sigmoid = nn.Sigmoid()
+
+    def forward(self, out_features, patch_h, patch_w, mask):
         out = []
         for i, x in enumerate(out_features):
             if self.use_clstoken:
@@ -190,14 +290,31 @@ class DPTHead(nn.Module):
         )
         out = self.scratch.output_conv2(out)
 
-        affordance_out = self.scratch.affordance_output_conv1(path_1)
-        affordance_out = F.interpolate(
-            affordance_out,
-            (int(patch_h * 14), int(patch_w * 14)),
+        seg_mask_resized = F.interpolate(
+            mask.float(), size=path_1.shape[2:], mode="nearest"
+        )
+
+        # Concatenate the segmentation mask with patch_1 features
+        patch_1_with_mask = torch.cat((path_1, seg_mask_resized), dim=1)
+
+        x = self.scratch.affordance_initial_conv(patch_1_with_mask)
+        x = self.scratch.affordance_initial_bn(x)
+        x = self.scratch.affordance_relu(x)
+        x = self.scratch.affordance_attention(x)  # Apply simplified self-attention here
+
+        x = F.interpolate(
+            x,
+            size=(int(patch_h * 14), int(patch_w * 14)),
             mode="bilinear",
             align_corners=True,
         )
-        affordance_out = self.scratch.affordance_output_conv2(affordance_out)
+
+        x = self.scratch.affordance_feature_extraction_extended(x)
+        # x = self.scratch.affordance_feature_extraction(x)
+
+        x = self.scratch.affordance_final_conv(x)
+        affordance_out = self.scratch.affordance_sigmoid(x)
+        affordance_out = affordance_out * mask.float()
 
         return out, affordance_out
 
@@ -241,6 +358,7 @@ class DPT_DINOv2(nn.Module):
         )
 
     def forward(self, x, mask):
+
         h, w = x.shape[-2:]
 
         features = self.pretrained.get_intermediate_layers(
@@ -249,14 +367,16 @@ class DPT_DINOv2(nn.Module):
 
         patch_h, patch_w = h // 14, w // 14
 
-        depth, affordance_map = self.depth_head(features, patch_h, patch_w)
+        depth, affordance_map = self.depth_head(features, patch_h, patch_w, mask)
         depth = F.interpolate(depth, size=(h, w), mode="bilinear", align_corners=True)
         depth = F.relu(depth)
 
-        affordance_map = F.interpolate(affordance_map, size=(h, w), mode="bilinear", align_corners=True)
+        affordance_map = F.interpolate(
+            affordance_map, size=(h, w), mode="bilinear", align_corners=True
+        )
         affordance_map = F.relu(affordance_map)
 
-        return depth.squeeze(1), affordance_map.squeeze(1)
+        return depth, affordance_map
 
 
 class DepthAnything(DPT_DINOv2, PyTorchModelHubMixin):

@@ -13,8 +13,6 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataset import random_split
 from torchvision import transforms
-from PIL import Image
-import pandas as pd
 import os
 import glob
 import torch.multiprocessing as mp
@@ -42,11 +40,16 @@ class CustomDataset(Dataset):
         self.labels_root = labels_root
 
         self.resize_transform = transforms.Resize(
-            (518, 518), interpolation=transforms.InterpolationMode.BICUBIC
+            (224, 224), interpolation=transforms.InterpolationMode.BICUBIC
         )
         self.normalize_transform = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
         )
+        
+        self.augmentation_transforms = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+        ])
 
         self.image_label_pairs = self._get_image_label_pairs()
 
@@ -82,7 +85,8 @@ class CustomDataset(Dataset):
                     # Find all matching label files and add to pairs
                     segmask_file = image_file.replace("rgb", "segmask")
                     for label_file in glob.glob(nbv_label_pattern):
-                        # label_value = np.load(label_file)["arr_0"]
+                        # label = np.load(label_file)["arr_0"].astype(np.float32)
+                        pairs.append((image_file, label_file, segmask_file))
                         pairs.append((image_file, label_file, segmask_file))
         return pairs
 
@@ -94,28 +98,56 @@ class CustomDataset(Dataset):
         crop_bin_dim = [73, 287, 195, 442]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
-        numpy_image = np.array(numpy_image).astype(np.float32) / 255.0
 
-        image = torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
-        image = self.normalize_transform(image)
-        image = self.resize_transform(image)
 
-        # Load label
-        match = re.search(self.pattern_rgb, image_file).group(1)
-        label = np.load(label_file)["arr_0"].astype(np.float32)
+        # plt.imshow(numpy_image)
+        # plt.show()
 
         # Load mask
         numpy_mask = cv2.imread(segmask_file, cv2.IMREAD_GRAYSCALE)
         match = re.search(self.pattern, label_file)
         mask_id = match.group(1)
-
         numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
         mask = numpy_mask == int(mask_id)
 
-        mask = torch.from_numpy(mask).unsqueeze(0)
+        # plt.imshow(mask)
+        # plt.show()
+
+        # w = 10
+        # h = 10
+        # fig = plt.figure(figsize=(8, 8))
+        # columns = 2
+        # rows = 1
+        # fig.add_subplot(rows, columns, 1)
+        # plt.imshow(numpy_image)
+
+
+        # fig.add_subplot(rows, columns, 2)
+        # plt.imshow(mask)
+        # plt.show()
+
+        # Load label
+        match = re.search(self.pattern_rgb, image_file).group(1)
+        label = np.load(label_file)["arr_0"].astype(np.float32)
+        label_div = (np.floor(label / 5)/2).astype(np.float32)
+        label_mod = ((label % 5)/4).astype(np.float32)
+        label_x_y = np.stack((label_div, label_mod), axis=1)
+
+        print(label_x_y)
+
+        if idx%2 == 0:
+            numpy_image = np.flip(numpy_image, 1)
+            mask = np.flip(mask, 1)
+            label_x_y[0][1] = 1 - label_x_y[0][1]
+        
+        image = torch.from_numpy(numpy_image.copy()).permute(2, 0, 1).float().div(255)
+        image = self.normalize_transform(image)
+        image = self.resize_transform(image)
+
+        mask = torch.from_numpy(mask.copy()).unsqueeze(0)
         mask = self.resize_transform(mask)
 
-        return image, label, mask
+        return image, label_x_y, mask
 
     def __len__(self):
         return len(self.image_label_pairs)
@@ -124,42 +156,34 @@ class CustomDataset(Dataset):
 def init_model():
     model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
     model = model.to("cuda")
-    # model.load_state_dict(
-    #     torch.load(
-    #         "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/temp.pth"
-    #     )
-    # )
 
     for name, param in model.named_parameters():
-        if "pretrained" in name or "depth_head.scratch.output_conv" in name:
+        if "nbv" not in name:
             param.requires_grad = False
-        # print(name, param.requires_grad)
 
-    criterion = torch.nn.MSELoss()
+    criterion = torch.nn.HuberLoss()
     # optimizer = torch.optim.AdamW(
     #     filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-1
     # )
     optimizer = torch.optim.Adam(
-        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4
+        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3
     )
 
-    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=2)
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=5)
 
     return model, criterion, optimizer, scheduler
 
 
 def train(train_dataloader, val_dataloader):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_epoch = 50
+    num_epoch = 200
 
     model, criterion, optimizer, scheduler = init_model()
-
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 
     running_loss = 0.0
 
-    scaling_factor = 10
-    gamma = 2
+    scaling_factor = 1e2
 
     model.train()
 
@@ -168,12 +192,14 @@ def train(train_dataloader, val_dataloader):
     for epoch in range(num_epoch):
         running_loss = 0.0
 
-        for images, labels, mask in train_dataloader:
-            images, labels, mask = images.to(device), labels.to(device), mask.to(device)
+        for images, label_x_y, mask in train_dataloader:
+            images, label_x_y, mask = images.to(device), label_x_y.to(device), mask.to(device)
             optimizer.zero_grad()
 
-            depth_out, nbv_out = model(images, mask)
-            loss = criterion(nbv_out, labels)
+            nbv_out = model(images, mask)
+            label_x_y = label_x_y.squeeze()
+            # labels = labels.squeeze().type(torch.float).cuda()
+            loss = criterion(nbv_out, label_x_y).requires_grad_(True)
             scaled_loss = loss * scaling_factor
 
             scaled_loss.backward()
@@ -182,7 +208,6 @@ def train(train_dataloader, val_dataloader):
 
             # progress_bar.update(1)
             # print(f"Loss: {loss.item()}")
-
         epoch_loss = running_loss / len(train_dataloader)
         print(f"Epoch {epoch + 1}, Loss: {epoch_loss}")
 
@@ -191,28 +216,28 @@ def train(train_dataloader, val_dataloader):
         validation_loss = 0.0
 
         with torch.no_grad():  # Disable gradient computation
-            for images, labels, mask in val_dataloader:
-                images, labels, mask = (
+            for images, label_x_y, mask in val_dataloader:
+                images, label_x_y, mask = (
                     images.to(device),
-                    labels.to(device),
+                    label_x_y.to(device),
                     mask.to(device),
                 )
 
-                depth_out, nbv_out = model(images, mask)
-                loss = criterion(nbv_out, labels)
+                nbv_out = model(images, mask)
+                label_x_y = label_x_y.squeeze()
+                loss = criterion(nbv_out, label_x_y)
                 scaled_loss = loss * scaling_factor
 
                 validation_loss += scaled_loss.item()
-
                 # progress_bar.update(1)
         avg_validation_loss = validation_loss / len(val_dataloader)
+        print(f"Validation Loss: {avg_validation_loss}")
         if avg_validation_loss < lowest_loss:
             lowest_loss = avg_validation_loss
             torch.save(
                 model,
                 "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/checkpoint_finetune_nbv.pth",
             )
-        print(f"Validation Loss: {avg_validation_loss}")
 
         model.train()
 
@@ -238,10 +263,10 @@ if __name__ == "__main__":
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=32, shuffle=True, num_workers=16
+        train_dataset, batch_size=32, shuffle=True, num_workers=0
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=32, shuffle=False, num_workers=16
+        val_dataset, batch_size=32, shuffle=False, num_workers=0
     )
 
     # Example training loop
