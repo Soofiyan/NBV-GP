@@ -313,11 +313,15 @@ class DPTHead(nn.Module):
         # x = self.scratch.affordance_feature_extraction(x)
 
         x = self.scratch.affordance_final_conv(x)
-        affordance_out = self.scratch.affordance_sigmoid(x)
-        print(affordance_out.shape)
+        print(x.shape)
+        affordance_out = x[:, :, 0]
+        affordance_out_angle = x[:, :, 1]
+        affordance_out = self.scratch.affordance_sigmoid(affordance_out)
+        affordance_out_angle = self.scratch.affordance_sigmoid(affordance_out_angle)
         affordance_out = affordance_out * mask.float()
+        affordance_out_angle = affordance_out_angle * mask.float()
 
-        return out, affordance_out
+        return out, affordance_out, affordance_out_angle
 
 
 class DPT_DINOv2(nn.Module):
@@ -368,7 +372,7 @@ class DPT_DINOv2(nn.Module):
 
         patch_h, patch_w = h // 14, w // 14
 
-        depth, affordance_map = self.depth_head(features, patch_h, patch_w, mask)
+        depth, affordance_map, affordance_map_angle = self.depth_head(features, patch_h, patch_w, mask)
         depth = F.interpolate(depth, size=(h, w), mode="bilinear", align_corners=True)
         depth = F.relu(depth)
 
@@ -377,7 +381,12 @@ class DPT_DINOv2(nn.Module):
         )
         affordance_map = F.relu(affordance_map)
 
-        return depth, affordance_map
+        affordance_map_angle = F.interpolate(
+            affordance_map_angle, size=(h, w), mode="bilinear", align_corners=True
+        )
+        affordance_map_angle = F.relu(affordance_map_angle)
+
+        return depth, affordance_map, affordance_map_angle
 
 
 class DepthAnything(DPT_DINOv2, PyTorchModelHubMixin):
