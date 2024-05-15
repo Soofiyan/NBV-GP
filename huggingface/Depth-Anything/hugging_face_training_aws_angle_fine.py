@@ -142,7 +142,6 @@ class CustomDataset(Dataset):
         crop_bin_dim = self.crop_bin_dim_dict[str(view_number)]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
-        numpy_image = np.array(numpy_image).astype(np.float32)
         image = torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
@@ -234,7 +233,7 @@ def init_model():
         filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3
     )
 
-    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=5)
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=7)
 
     return model, criterion, optimizer, scheduler
 
@@ -269,15 +268,15 @@ def train(rank, world_size, images_root_path, labels_root_path):
         train_dataset,
         batch_size=local_batch_size,
         sampler=sampler_train,
-        num_workers=4,
-        pin_memory=False,
+        num_workers=32,
+        pin_memory=True,
     )
     val_dataloader = DataLoader(
         val_dataset,
         batch_size=local_batch_size,
         sampler=sampler_val,
-        num_workers=4,
-        pin_memory=False,
+        num_workers=32,
+        pin_memory=True,
     )
 
     num_epoch = 200
@@ -345,10 +344,10 @@ def train(rank, world_size, images_root_path, labels_root_path):
         avg_validation_loss = validation_loss / len(val_dataloader)
         if rank == 0 and avg_validation_loss < lowest_loss:
             lowest_loss = avg_validation_loss
-            # torch.save(
-            #     model,
-            #     "/home/ubuntu/checkpoint_finetune_lr_2.pth",
-            # )
+            torch.save(
+                model,
+                "/home/ubuntu/checkpoint_multi_angle.pth",
+            )
         if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
 
@@ -367,8 +366,8 @@ if __name__ == "__main__":
 
     world_size = torch.cuda.device_count()
 
-    images_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp"
-    labels_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/labels_nbv_3F_angle_2"
+    images_root="/home/ubuntu/compress_observation_2_gp"
+    labels_root="/home/ubuntu/labels_nbv_3F_angle_2"
 
     # Example training loop
     mp.spawn(
