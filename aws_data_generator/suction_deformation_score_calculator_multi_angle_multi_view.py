@@ -596,6 +596,12 @@ def collect_data(rank, world_size, images_root_path):
 
     dataset = CustomDataset(images_root=images_root_path)
 
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
+
+    # Determine sizes for training and validation sets
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+
     process_dataloader = DataLoader(
         dataset, batch_size=1, shuffle=False, num_workers=32
     )
