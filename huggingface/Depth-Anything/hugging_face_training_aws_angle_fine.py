@@ -387,7 +387,7 @@ if __name__ == "__main__":
 
     world_size = torch.cuda.device_count()
 
-    images_root="/home/ubuntu/observation_data_nbv_3F_2"
+    images_root="/home/ubuntu/compress_observation_2_gp"
     labels_root="/home/ubuntu/labels_nbv_3F_angle_2"
 
     # Example training loop
