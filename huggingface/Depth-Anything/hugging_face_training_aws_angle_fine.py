@@ -365,10 +365,10 @@ def train(rank, world_size, images_root_path, labels_root_path):
         avg_validation_loss = validation_loss / len(val_dataloader)
         if rank == 0 and avg_validation_loss < lowest_loss:
             lowest_loss = avg_validation_loss
-            # torch.save(
-            #     model,
-            #     "/home/ubuntu/checkpoint_multi_angle.pth",
-            # )
+            torch.save(
+                model,
+                "/home/ubuntu/checkpoint_multi_angle_restricted.pth",
+            )
         if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
 

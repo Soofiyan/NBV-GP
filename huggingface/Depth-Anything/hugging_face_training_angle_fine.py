@@ -4,7 +4,7 @@ import cv2
 import torch
 import torch.nn.functional as F
 
-from depth_anything.dpt import DepthAnything
+from depth_anything.dpt_angle_fine import DepthAnything
 from depth_anything.util.transform import Resize, NormalizeImage, PrepareForNet
 from torchvision.transforms import Compose
 import matplotlib.pyplot as plt
@@ -39,7 +39,7 @@ class CropTransform:
         # Fill the rhombus with white (255)
         cv2.fillPoly(mask, points, (255, 255, 255))
         return mask
-
+    
     def crop_image(self, image, mask, pad_size=50):
         # Apply mask to the image (single-channel)
 
@@ -57,7 +57,9 @@ class CropTransform:
 
     def __call__(self, x):
         mask_rgb = self.create_rhombus_mask(x, self.crop_dim)
-        rgb_image_cropped = self.crop_image(x, mask_rgb, pad_size=50)
+        rgb_image_cropped = self.crop_image(
+            x, mask_rgb, pad_size=50
+        )
         return rgb_image_cropped
 
 
@@ -67,7 +69,7 @@ class CustomDataset(Dataset):
         self.labels_root = labels_root
 
         self.resize_transform = transforms.Resize(
-            (518, 518), interpolation=transforms.InterpolationMode.BICUBIC
+            (224, 224), interpolation=transforms.InterpolationMode.BICUBIC
         )
         self.normalize_transform = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -122,57 +124,72 @@ class CustomDataset(Dataset):
                         ".jpg", ".png"
                     )
                     for label_file in glob.glob(label_pattern):
+                        if "affordance_map_angle" in label_file:
+                            continue
                         label_img = Image.open(label_file).convert("L")
+                        label_angle_file = label_file.replace("affordance_map", "affordance_map_angle")
                         if np.any(np.array(label_img) > 0):
-                            pairs.append(
-                                (image_file, label_file, segmask_file, view_number)
-                            )
+                            pairs.append((image_file, label_file, label_angle_file, segmask_file, view_number))
                         # pairs.append((image_file, label_file, segmask_file))
         return pairs
 
     def __getitem__(self, idx):
-        image_file, label_file, segmask_file, view_number = self.image_label_pairs[idx]
+        image_file, label_file, label_angle_file, segmask_file, view_number = self.image_label_pairs[idx]
 
         # Load image
         numpy_image = cv2.imread(image_file).astype(np.uint8)
         numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
         crop_bin_dim = self.crop_bin_dim_dict[str(view_number)]
 
-        fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
-        
-        axs[0].imshow(numpy_image)
-        numpy_image = np.array(numpy_image).astype(np.float32)
         image = torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
 
-        # Load label
-        label = Image.open(label_file).convert("L")
-        numpy_label = np.array(label)
-
-        label = torch.from_numpy(numpy_label).unsqueeze(0).float().div(255)
-        label = self.resize_transform(label)
-        axs[1].imshow(label.cpu().numpy().squeeze(0))
 
         numpy_mask = cv2.imread(segmask_file, 0)
         match = re.search(self.pattern, label_file)
         mask_id = match.group(1)
         numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
-        mask = numpy_mask == int(mask_id)
-        mask = torch.from_numpy(mask).unsqueeze(0)
+        numpy_mask = numpy_mask == int(mask_id)
+        mask = torch.from_numpy(numpy_mask).unsqueeze(0)
         mask = self.resize_transform(mask)
-        axs[2].imshow(mask.cpu().numpy().squeeze(0))
 
-        axs[0].set_title("Image")
-        axs[1].set_title("Label")
-        axs[2].set_title("Mask")
+        # Load label
+        label = Image.open(label_file).convert("L")
+        numpy_label = np.array(label)
+        label = torch.from_numpy(numpy_label).unsqueeze(0).float().div(255)
+        label = self.resize_transform(label)
 
-        plt.tight_layout()
+        label_angle = Image.open(label_angle_file).convert("L")
+        numpy_label_angle = np.array(label_angle)
+        numpy_label_angle[(numpy_label_angle == 0) | (numpy_label_angle == 255)] = 119
+        numpy_label_angle = numpy_label_angle*numpy_mask
+        label_angle = torch.from_numpy(numpy_label_angle).unsqueeze(0)
+        label_angle = self.resize_transform(label_angle).squeeze(0)
+        label_angle_pitch, label_angle_roll = self.decode_roll_pitch(label_angle)
+
+        plt.imshow(label_angle_pitch.detach().cpu().numpy())
+        plt.show()
+        plt.imshow(label_angle_roll.detach().cpu().numpy())
         plt.show()
 
-        return image, label, mask
+        label_angle_pitch = self.encode_roll_pitch(label_angle_pitch).unsqueeze(0).float().div(255)
+        label_angle_roll = self.encode_roll_pitch(label_angle_roll).unsqueeze(0).float().div(255)
+
+
+        return image, label, label_angle_pitch, label_angle_roll, mask
+    
+    def decode_roll_pitch(self, pixel_value):
+        quantized_roll = (pixel_value >> 4) & 0x0F
+        quantized_pitch = pixel_value & 0x0F
+        roll = (quantized_roll / 15.0) * 30.0 - 15.0
+        pitch = (quantized_pitch / 15.0) * 30.0 - 15.0
+        return pitch, roll
+    
+    def encode_roll_pitch(self, angle):
+        normalized_angle = (angle + 15) / 30
+        return normalized_angle
 
     def __len__(self):
         return len(self.image_label_pairs)
@@ -240,7 +257,7 @@ def init_model():
         filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3
     )
 
-    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=2)
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=7)
 
     return model, criterion, optimizer, scheduler
 
@@ -253,6 +270,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
         images_root=images_root_path,
         labels_root=labels_root_path,
     )
+    print(len(dataset))
 
     # Determine sizes for training and validation sets
     train_size = int(0.8 * len(dataset))
@@ -268,31 +286,32 @@ def train(rank, world_size, images_root_path, labels_root_path):
         val_dataset, num_replicas=world_size, rank=rank, shuffle=False
     )
 
-    local_batch_size = 12
+    local_batch_size = 1
 
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=local_batch_size,
         sampler=sampler_train,
         num_workers=0,
-        pin_memory=True,
+        pin_memory=False,
     )
     val_dataloader = DataLoader(
         val_dataset,
         batch_size=local_batch_size,
         sampler=sampler_val,
         num_workers=0,
-        pin_memory=True,
+        pin_memory=False,
     )
 
     num_epoch = 200
 
     model, criterion, optimizer, scheduler = init_model()
 
-    model = torch.load(
-        "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_finetune_aws_50_epochs.pth",
-        map_location=lambda storage, loc: storage.cuda(rank),
-    )
+    # model = torch.load(
+    #     "/home/ubuntu/checkpoint_finetune2.pth",
+    #     map_location=lambda storage, loc: storage.cuda(rank),
+    # )
+    # model = model.module
 
     model.to(rank)
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)
@@ -303,24 +322,23 @@ def train(rank, world_size, images_root_path, labels_root_path):
 
     model.train()
 
-    lowest_loss = float("inf")
+    lowest_loss = 100000.0
 
     for epoch in range(num_epoch):
         running_loss = 0.0
         sampler_train.set_epoch(epoch)
         sampler_val.set_epoch(epoch)
 
-        for images, labels, mask in train_dataloader:
-            images, labels, mask = images.to(rank), labels.to(rank), mask.to(rank)
+        for images, labels, labels_angle_pitch, labels_angle_roll, mask in train_dataloader:
+            images, labels, labels_angle_pitch, labels_angle_roll, mask = images.to(rank), labels.to(rank), labels_angle_pitch.to(rank), labels_angle_roll.to(rank), mask.to(rank)
             optimizer.zero_grad()
 
-            depth_out, affordance_map_out = model(images, mask)
-
-            # weighted_loss = weighted_huber_loss(affordance_map_out, labels)
-            # scaled_loss = weighted_loss * scaling_factor
+            depth_out, affordance_map_out, affordance_map_pitch_out, affordance_map_roll_out = model(images, mask)
 
             loss = criterion(affordance_map_out, labels)
-            scaled_loss = loss * scaling_factor
+            loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
+            loss_angle_roll  = criterion(affordance_map_roll_out, labels_angle_roll)
+            scaled_loss = loss * scaling_factor + loss_angle_pitch * scaling_factor + loss_angle_roll * scaling_factor
 
             scaled_loss.backward()
             optimizer.step()
@@ -337,18 +355,14 @@ def train(rank, world_size, images_root_path, labels_root_path):
         validation_loss = 0.0
 
         with torch.no_grad():  # Disable gradient computation
-            for images, labels, mask in val_dataloader:
-                images, labels, mask = (
-                    images.to(rank),
-                    labels.to(rank),
-                    mask.to(rank),
-                )
-                _, affordance_map_out = model(images, mask)
-                # weighted_loss = weighted_huber_loss(affordance_map_out, labels)
-                # scaled_loss = weighted_loss * scaling_factor
+            for images, labels, labels_angle_pitch, labels_angle_roll, mask in val_dataloader:
+                images, labels, labels_angle_pitch, labels_angle_roll, mask = images.to(rank), labels.to(rank), labels_angle_pitch.to(rank), labels_angle_roll.to(rank), mask.to(rank)
+                depth_out, affordance_map_out, affordance_map_pitch_out, affordance_map_roll_out = model(images, mask)
 
                 loss = criterion(affordance_map_out, labels)
-                scaled_loss = loss * scaling_factor
+                loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
+                loss_angle_roll  = criterion(affordance_map_roll_out, labels_angle_roll)
+                scaled_loss = loss * scaling_factor + loss_angle_pitch * scaling_factor + loss_angle_roll * scaling_factor
 
                 validation_loss += scaled_loss.item()
 
@@ -358,7 +372,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             lowest_loss = avg_validation_loss
             # torch.save(
             #     model,
-            #     "/home/ubuntu/checkpoint_finetune3.pth",
+            #     "/home/ubuntu/checkpoint_multi_angle.pth",
             # )
         if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
@@ -378,8 +392,8 @@ if __name__ == "__main__":
 
     world_size = torch.cuda.device_count()
 
-    images_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/compress_observation_2_gp"
-    labels_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/compress_observation_2_gp"
+    images_root="/home/ubuntu/compress_observation_2_gp"
+    labels_root="/home/ubuntu/labels_nbv_3F_angle_2"
 
     # Example training loop
     mp.spawn(
