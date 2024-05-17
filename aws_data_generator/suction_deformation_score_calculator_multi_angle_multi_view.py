@@ -18,8 +18,13 @@ from mpl_toolkits.mplot3d import Axes3D
 import open3d as o3d
 
 from torch.utils.data import Dataset, DataLoader
-import torch.multiprocessing as mp
 from torchvision import transforms
+
+
+from torch.utils.data.distributed import DistributedSampler
+import torch.multiprocessing as mp
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 def softmax(x):
@@ -566,29 +571,49 @@ class CustomDataset(Dataset):
                 ]
 
                 cv2.imwrite(affordance_map_path, affordance_map.cpu().numpy())
-                cv2.imwrite(
-                    affordance_map_roll_path, affordance_map_roll.cpu().numpy()
-                )
+                cv2.imwrite(affordance_map_roll_path, affordance_map_roll.cpu().numpy())
                 cv2.imwrite(
                     affordance_map_pitch_path, affordance_map_pitch.cpu().numpy()
                 )
 
-        return affordance_map_path, affordance_map_angle_path
+        return affordance_map_path, affordance_map_roll_path, affordance_map_pitch_path
 
     def __len__(self):
         return len(self.image_label_pairs)
 
+def setup(rank, world_size):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
 
-if __name__ == "__main__":
-    mp.set_start_method("spawn", force=True)
+def cleanup():
+    dist.destroy_process_group()
 
-    dataset = CustomDataset(
-        images_root="/home/ubuntu/observation_data_nbv_3F_2"
+
+def collect_data(rank, world_size, images_root_path):
+    setup(rank, world_size)
+
+    dataset = CustomDataset(images_root=images_root_path)
+
+    process_dataloader = DataLoader(
+        dataset, batch_size=32, shuffle=False, num_workers=64
     )
 
-    process_dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=64)
-
     count = 0
-    for affordance_map_path, affordance_map_angle_path in process_dataloader:
+    for affordance_map_path, affordance_map_roll_path, affordance_map_pitch_path in process_dataloader:
         print(count)
         count += 1
+    
+    cleanup()
+
+
+if __name__ == "__main__":
+    mp.set_start_method("fork", force=True)
+
+    world_size = torch.cuda.device_count()
+
+    images_root = "/home/ubuntu/observation_data_nbv_3F_2"
+
+    mp.spawn(collect_data, args=(world_size, images_root), nprocs=world_size, join=True)
+
