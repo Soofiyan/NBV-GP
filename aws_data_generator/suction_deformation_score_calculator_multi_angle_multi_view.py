@@ -285,7 +285,8 @@ class CustomDataset(Dataset):
         segmask_cropped = torch.from_numpy(numpy_mask).cuda()
 
         affordance_map_path = ""
-        affordance_map_angle_path = ""
+        affordance_map_roll_path = ""
+        affordance_map_pitch_path = ""
 
         mask_numbers = torch.unique(segmask_cropped)
 
@@ -600,9 +601,9 @@ def collect_data(rank, world_size, images_root_path):
 
     process_dataloader = DataLoader(
         dataset,
-        batch_size=32,
+        batch_size=1,
         sampler=sampler,
-        num_workers=32,
+        num_workers=16,
         pin_memory=False,
     )
 
