@@ -597,7 +597,7 @@ def collect_data(rank, world_size, images_root_path):
     dataset = CustomDataset(images_root=images_root_path)
 
     process_dataloader = DataLoader(
-        dataset, batch_size=32, shuffle=False, num_workers=64
+        dataset, batch_size=1, shuffle=False, num_workers=32
     )
 
     count = 0
