@@ -96,6 +96,10 @@ class CustomDataset(Dataset):
             "14": [(192, 71), (402, 54), (402, 263), (175, 253)],
         }
 
+
+        self.roll_values = list(range(-30, 31, 5))
+        self.pitch_values = list(range(-30, 31, 5))
+
     def _get_image_label_pairs(self):
         pairs = []
         # Iterate through all the run_ID directories
@@ -166,30 +170,44 @@ class CustomDataset(Dataset):
         numpy_label_angle[(numpy_label_angle == 0) | (numpy_label_angle == 255)] = 119
         numpy_label_angle = numpy_label_angle*numpy_mask
         label_angle = torch.from_numpy(numpy_label_angle).unsqueeze(0)
-        label_angle = self.resize_transform(label_angle).squeeze(0)
+        label_angle = self.resize_transform(label_angle).squeeze(0).to(torch.uint8)
+
+        # for i in range(-30, 31, 5):
+        #     for j in range(-30, 31, 5):
+        #         encoded = self.encode(i, j)
+        #         print(f"i: {i}, j: {j}, encoded: {encoded}")
+        #         print(self.decode_roll_pitch(encoded))
+        
         label_angle_pitch, label_angle_roll = self.decode_roll_pitch(label_angle)
 
-        plt.imshow(label_angle_pitch.detach().cpu().numpy())
-        plt.show()
-        plt.imshow(label_angle_roll.detach().cpu().numpy())
-        plt.show()
-
-        label_angle_pitch = self.encode_roll_pitch(label_angle_pitch).unsqueeze(0).float().div(255)
-        label_angle_roll = self.encode_roll_pitch(label_angle_roll).unsqueeze(0).float().div(255)
-
+        label_angle_pitch = self.encode_roll_pitch(label_angle_pitch).unsqueeze(0).float()
+        label_angle_roll = self.encode_roll_pitch(label_angle_roll).unsqueeze(0).float()
 
         return image, label, label_angle_pitch, label_angle_roll, mask
     
     def decode_roll_pitch(self, pixel_value):
-        quantized_roll = (pixel_value >> 4) & 0x0F
-        quantized_pitch = pixel_value & 0x0F
-        roll = (quantized_roll / 15.0) * 30.0 - 15.0
-        pitch = (quantized_pitch / 15.0) * 30.0 - 15.0
-        return pitch, roll
+
+        roll_index = (pixel_value >> 4) & 0x0F
+        pitch_index = pixel_value & 0x0F
+
+        roll = self.roll_values[roll_index]
+        pitch = self.pitch_values[pitch_index]
+
+        return roll, pitch
     
     def encode_roll_pitch(self, angle):
-        normalized_angle = (angle + 15) / 30
+        normalized_angle = (angle + 30) / 60
         return normalized_angle
+    
+    def encode(self, roll, pitch):
+        if roll not in self.roll_values or pitch not in self.pitch_values:
+            raise ValueError("Roll and pitch values must be within the range -15 to 15 with a step of 3")
+
+        roll_index = self.roll_values.index(roll)
+        pitch_index = self.pitch_values.index(pitch)
+
+        pixel_value = (roll_index << 4) | pitch_index
+        return pixel_value
 
     def __len__(self):
         return len(self.image_label_pairs)
@@ -392,8 +410,8 @@ if __name__ == "__main__":
 
     world_size = torch.cuda.device_count()
 
-    images_root="/home/ubuntu/compress_observation_2_gp"
-    labels_root="/home/ubuntu/labels_nbv_3F_angle_2"
+    images_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp"
+    labels_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/labels_nbv_3F_angle_2"
 
     # Example training loop
     mp.spawn(
