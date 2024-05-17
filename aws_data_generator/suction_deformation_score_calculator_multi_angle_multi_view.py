@@ -201,7 +201,7 @@ class CropTransform:
 
 
 class CustomDataset(Dataset):
-    def __init__(self, images_root):
+    def __init__(self, rank, images_root):
         self.images_root = images_root
 
         self.resize_transform = transforms.Resize(
@@ -236,6 +236,8 @@ class CustomDataset(Dataset):
         negative_range = torch.linspace(-torch.pi / 6, 0, 7)
         self.pitch_angle = torch.concatenate((positive_range, negative_range[:-1]))
         self.roll_angle = torch.concatenate((positive_range, negative_range[:-1]))
+
+        self.rank = rank
 
     def _get_image_label_pairs(self):
         pairs = []
@@ -274,15 +276,15 @@ class CustomDataset(Dataset):
         numpy_image = cv2.imread(image_file).astype(np.uint8)
         numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
-        rgb_image_cropped = torch.from_numpy(numpy_image).cuda()
+        rgb_image_cropped = torch.from_numpy(numpy_image).to(self.rank)
 
         depth_image = np.load(depth_image_file)["arr_0"]
         depth_image = CropTransform(crop_bin_dim)(depth_image)
-        depth_image_cropped = torch.from_numpy(depth_image).to(torch.float16).cuda()
+        depth_image_cropped = torch.from_numpy(depth_image).to(torch.float16).to(self.rank)
 
         numpy_mask = cv2.imread(segmask_file, 0)
         numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
-        segmask_cropped = torch.from_numpy(numpy_mask).cuda()
+        segmask_cropped = torch.from_numpy(numpy_mask).to(self.rank)
 
         affordance_map_path = ""
         affordance_map_roll_path = ""
@@ -304,7 +306,7 @@ class CustomDataset(Dataset):
 
             angle_resolution = 1
             angles = (
-                torch.arange(0, 360, angle_resolution, device="cuda").to(torch.float16)
+                torch.arange(0, 360, angle_resolution, device=self.rank).to(torch.float16)
                 * torch.pi
                 / 180
             )
@@ -318,18 +320,18 @@ class CustomDataset(Dataset):
                 depth_image_masked = torch.where(
                     mask_indices,
                     depth_image_cropped,
-                    torch.tensor(0).to(torch.float16).cuda(),
+                    torch.tensor(0).to(torch.float16).to(self.rank),
                 )
 
                 depth_image_normal = depth_image_masked
 
-                point_cloud_im = deproject_to_image(depth_image_normal).cuda()
-                normal_cloud_im = normal_cloud_project(point_cloud_im).cuda()
+                point_cloud_im = deproject_to_image(depth_image_normal).to(self.rank)
+                normal_cloud_im = normal_cloud_project(point_cloud_im).to(self.rank)
 
                 initial_shape = point_cloud_im.shape
 
-                point_cloud_flat = torch.reshape(point_cloud_im, (-1, 3)).cuda()
-                normal_cloud_flat = torch.reshape(normal_cloud_im, (-1, 3)).cuda()
+                point_cloud_flat = torch.reshape(point_cloud_im, (-1, 3)).to(self.rank)
+                normal_cloud_flat = torch.reshape(normal_cloud_im, (-1, 3)).to(self.rank)
 
                 best_score = None
                 angle_roll = None
@@ -363,7 +365,7 @@ class CustomDataset(Dataset):
                     for roll in self.roll_angle:
                         point_cloud_im_rotated, normal_cloud_im_rotated = (
                             apply_rotation(
-                                point_cloud_flat, normal_cloud_flat, pitch, roll
+                                point_cloud_flat, normal_cloud_flat, pitch, roll, device=self.rank
                             )
                         )
                         depth_image_masked_rotated = update_depth(
@@ -391,7 +393,7 @@ class CustomDataset(Dataset):
                         )
 
                         non_zero_coordinates = torch.tensor(
-                            non_zero_coordinates_list, device="cuda"
+                            non_zero_coordinates_list, device=self.rank
                         ).long()
 
                         # Compute base coordinates for all non-zero coordinates
@@ -455,10 +457,10 @@ class CustomDataset(Dataset):
                             torch.clamp(dot_products, -1.0, 1.0)
                         )
                         angle_threshold = torch.empty(
-                            (angles_between_vectors.shape[0], 1), device="cuda"
-                        ).fill_(torch.deg2rad(torch.tensor(45, device="cuda")))
+                            (angles_between_vectors.shape[0], 1), device=self.rank
+                        ).fill_(torch.deg2rad(torch.tensor(45, device=self.rank)))
                         scores = torch.maximum(
-                            torch.tensor(0).cuda(),
+                            torch.tensor(0).to(self.rank),
                             angle_threshold - angles_between_vectors,
                         )
                         normalized_scores = scores / angle_threshold * 100
@@ -474,7 +476,7 @@ class CustomDataset(Dataset):
                             / torch.pi
                         )
                         angle_inclined_score = (
-                            (torch.tensor(75).cuda() - angle_inclined) * 100 / 75
+                            (torch.tensor(75).to(self.rank) - angle_inclined) * 100 / 75
                         )
 
                         # Depth variability
@@ -485,9 +487,9 @@ class CustomDataset(Dataset):
                         batch_size = depth_values.shape[0]
                         # Spacing calculation assuming angle_resolution is defined
                         spacing = torch.tensor(
-                            int(90 / angle_resolution)).cuda()
+                            int(90 / angle_resolution)).to(self.rank)
                         indices = (
-                            torch.arange(num_measurements).unsqueeze(0).cuda()
+                            torch.arange(num_measurements).unsqueeze(0).to(self.rank)
                             + spacing
                         ) % num_measurements
                         indices_repeated = indices.expand(batch_size, -1)
@@ -498,7 +500,7 @@ class CustomDataset(Dataset):
                         cost = 10 * angle_resolution * differences.sum(dim=1)
 
                         # Anomaly scores and normalization
-                        max_anomaly_score = torch.tensor(20.0).cuda()
+                        max_anomaly_score = torch.tensor(20.0).to(self.rank)
                         expected_depth, _ = torch.max(depth_values, dim=1, keepdim=True)
                         anomaly_scores = expected_depth - depth_values
                         sum_of_anomaly_scores = torch.sum(anomaly_scores, dim=1)
@@ -530,8 +532,8 @@ class CustomDataset(Dataset):
 
                         encoded_roll = ((roll * 180 / torch.pi + 30) / 60) * 255
                         encoded_pitch = ((pitch * 180 / torch.pi + 30) / 60) * 255
-                        angle_roll[greater] = encoded_roll.to(torch.float32).cuda()
-                        angle_pitch[greater] = encoded_pitch.to(torch.float32).cuda()
+                        angle_roll[greater] = encoded_roll.to(torch.float32).to(self.rank)
+                        angle_pitch[greater] = encoded_pitch.to(torch.float32).to(self.rank)
 
                 num_zero_values_per_batch = torch.count_nonzero(
                     depth_values == 0, axis=1
@@ -594,7 +596,7 @@ def cleanup():
 def collect_data(rank, world_size, images_root_path):
     setup(rank, world_size)
 
-    dataset = CustomDataset(images_root=images_root_path)
+    dataset = CustomDataset(rank, images_root=images_root_path)
 
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)
 
