@@ -1,0 +1,435 @@
+import numpy as np
+from PIL import Image
+import cv2
+import torch
+import torch.nn.functional as F
+
+from depth_anything.dpt_angle_fine import DepthAnything
+from depth_anything.util.transform import Resize, NormalizeImage, PrepareForNet
+from torchvision.transforms import Compose
+import matplotlib.pyplot as plt
+
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.dataset import random_split
+from torchvision import transforms
+from PIL import Image
+import pandas as pd
+import os
+import glob
+import torch.multiprocessing as mp
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import random
+import re
+
+from tqdm.auto import tqdm
+
+
+class CropTransform:
+    def __init__(self, crop_dim):
+        self.crop_dim = crop_dim
+
+    def create_rhombus_mask(self, image, vertices):
+        # Create a mask with zeros (black)
+        mask = np.zeros_like(image)
+        # Define the rhombus vertices - these need to be specified as a list of points (x, y)
+        points = np.array([vertices], dtype=np.int32)
+        # Fill the rhombus with white (255)
+        cv2.fillPoly(mask, points, (255, 255, 255))
+        return mask
+
+    def crop_image(self, image, mask, pad_size=50):
+        # Apply mask to the image (single-channel)
+
+        mask = (mask / 255).astype(np.uint8)
+        masked_image = image * mask
+        if mask.ndim == 3:
+            mask = mask[:, :, 0]
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        x, y, w, h = cv2.boundingRect(contours[0])
+        cropped_image = masked_image[y : y + h, x : x + w]
+        # Padding color is 0 for single-channel images
+        # padded_image = cv2.copyMakeBorder(cropped_image, pad_size, pad_size, pad_size, pad_size, cv2.BORDER_CONSTANT, value=0)
+        return cropped_image
+
+    def __call__(self, x):
+        mask_rgb = self.create_rhombus_mask(x, self.crop_dim)
+        rgb_image_cropped = self.crop_image(x, mask_rgb, pad_size=50)
+        return rgb_image_cropped
+
+
+class CustomDataset(Dataset):
+    def __init__(self, images_root, labels_root):
+        self.images_root = images_root
+        self.labels_root = labels_root
+
+        self.resize_transform = transforms.Resize(
+            (224, 224), interpolation=transforms.InterpolationMode.BICUBIC
+        )
+        self.normalize_transform = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        )
+
+        self.image_label_pairs = self._get_image_label_pairs()
+
+        self.pattern = r"affordance_map_(\d+)_"
+        self.crop_bin_dim_dict = {
+            "0": [(239, 102), (465, 112), (447, 295), (237, 307)],
+            "1": [(225, 100), (463, 107), (447, 299), (227, 309)],
+            "2": [(193, 102), (447, 102), (437, 305), (206, 308)],
+            "3": [(179, 109), (415, 100), (415, 309), (194, 299)],
+            "4": [(176, 113), (401, 102), (406, 309), (194, 296)],
+            "5": [(239, 69), (465, 85), (463, 276), (238, 291)],
+            "6": [(224, 71), (460, 81), (460, 281), (223, 294)],
+            "7": [(196, 74), (443, 72), (445, 291), (197, 294)],
+            "8": [(180, 82), (416, 71), (416, 294), (182, 285)],
+            "9": [(178, 90), (402, 73), (405, 294), (180, 278)],
+            "10": [(236, 55), (447, 68), (465, 250), (238, 262)],
+            "11": [(225, 54), (447, 64), (464, 256), (224, 260)],
+            "12": [(203, 55), (436, 54), (447, 259), (194, 259)],
+            "13": [(192, 64), (414, 55), (414, 262), (175, 255)],
+            "14": [(192, 71), (402, 54), (402, 263), (175, 253)],
+        }
+
+    def _get_image_label_pairs(self):
+        pairs = []
+        # Iterate through all the run_ID directories
+        for run_id_path in glob.glob(os.path.join(self.images_root, "run_ID_*")):
+            # Extract run ID from the path
+            run_id = os.path.basename(run_id_path)
+            # For each folder_id within the run_ID directory
+            for folder_id_path in glob.glob(os.path.join(run_id_path, "3F", "*")):
+                folder_id = os.path.basename(folder_id_path)
+                # For each image file within the folder_id directory
+                for image_file in glob.glob(os.path.join(folder_id_path, "rgb*.jpg")):
+                    # Derive the base name for the image file to match labels
+                    base_name = os.path.splitext(os.path.basename(image_file))[0]
+                    count = base_name.split("_")[-1]
+                    view_number = base_name.split("_")[-2]
+                    # Pattern for corresponding label files
+                    label_pattern = os.path.join(
+                        self.labels_root,
+                        run_id,
+                        "3F",
+                        folder_id,
+                        f"affordance_map_*_{folder_id}_{view_number}_{count}.png",
+                    )
+                    # Find all matching label files and add to pairs
+                    segmask_file = image_file.replace("rgb", "segmask").replace(
+                        ".jpg", ".png"
+                    )
+                    for label_file in glob.glob(label_pattern):
+                        if "affordance_map_angle" in label_file:
+                            continue
+                        label_img = Image.open(label_file).convert("L")
+                        label_angle_file = label_file.replace(
+                            "affordance_map", "affordance_map_angle"
+                        )
+                        if np.any(np.array(label_img) > 0):
+                            pairs.append(
+                                (
+                                    image_file,
+                                    label_file,
+                                    label_angle_file,
+                                    segmask_file,
+                                    view_number,
+                                )
+                            )
+                        # pairs.append((image_file, label_file, segmask_file))
+        return pairs
+
+    def __getitem__(self, idx):
+        image_file, label_file, label_angle_file, segmask_file, view_number = (
+            self.image_label_pairs[idx]
+        )
+
+        # Load image
+        numpy_image = cv2.imread(image_file).astype(np.uint8)
+        numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
+        crop_bin_dim = self.crop_bin_dim_dict[str(view_number)]
+
+        numpy_image = CropTransform(crop_bin_dim)(numpy_image)
+        raw_image = (
+            self.resize_transform(torch.from_numpy(numpy_image).permute(2, 0, 1))
+            .permute(1, 2, 0)
+            .detach()
+            .cpu()
+            .numpy()
+        )
+        image = torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
+        image = self.normalize_transform(image)
+        image = self.resize_transform(image)
+
+        # Load label
+        label = Image.open(label_file).convert("L")
+        numpy_label = np.array(label)
+        label = torch.from_numpy(numpy_label).unsqueeze(0).float().div(255)
+        label = self.resize_transform(label)
+
+        label_angle = Image.open(label_angle_file).convert("L")
+        numpy_label_angle = np.array(label_angle)
+        label_angle = torch.from_numpy(numpy_label_angle).unsqueeze(0).float().div(255)
+        label_angle = self.resize_transform(label_angle)
+
+        numpy_mask = cv2.imread(segmask_file, 0)
+        match = re.search(self.pattern, label_file)
+        mask_id = match.group(1)
+        numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
+        mask = numpy_mask == int(mask_id)
+        mask = torch.from_numpy(mask).unsqueeze(0)
+        mask = self.resize_transform(mask)
+
+        return image, label, label_angle, mask, raw_image
+
+    def __len__(self):
+        return len(self.image_label_pairs)
+
+
+def save_plot(label, affordance_map, mask, epoch):
+    fig, axs = plt.subplots(1, 3)
+    # Plot the first subplot
+    axs[0].imshow(mask.squeeze(0).detach().cpu().numpy())  # red line
+    axs[0].axis("off")
+
+    axs[1].imshow(label.squeeze(0).detach().cpu().numpy())  # red line
+    axs[1].axis("off")
+
+    axs[2].imshow(affordance_map.squeeze(0).detach().cpu().numpy())  # red line
+    axs[2].axis("off")
+
+    plt.tight_layout()  # Adjust subplots to fit into the figure area.
+    save_path = "/home/ubuntu/results_plots_2"
+    os.makedirs(save_path, exist_ok=True)
+    plt.savefig(f"{save_path}/epoch_{epoch}.png")
+
+
+def setup(rank, world_size):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+
+def cleanup():
+    dist.destroy_process_group()
+
+
+def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
+    # Calculate the errors
+    errors = predictions - labels
+    # Define weights; here we use 1/(scores + epsilon) to avoid division by zero
+    weights = 1 / (torch.abs(errors) + epsilon)
+    # Calculate Huber loss
+    is_small_error = torch.abs(errors) < delta
+    squared_loss = 0.5 * (errors**2)
+    linear_loss = delta * (torch.abs(errors) - 0.5 * delta)
+    # Combine using a mask
+    huber_loss = torch.where(is_small_error, squared_loss, linear_loss)
+    weighted_huber = weights * huber_loss
+    # Mean over all samples
+    loss = torch.mean(weighted_huber)
+    return loss
+
+
+def init_model():
+    model = DepthAnything.from_pretrained("LiheYoung/depth_anything_vits14")
+    for name, param in model.named_parameters():
+        if "pretrained" in name or "depth_head.scratch.output_conv" in name:
+            param.requires_grad = False
+    criterion = torch.nn.HuberLoss()
+    optimizer = torch.optim.Adam(
+        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3
+    )
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=7)
+    return model, criterion, optimizer, scheduler
+
+
+def decode_roll_pitch(pixel_value):
+    quantized_roll = (pixel_value >> 4) & 0x0F
+    quantized_pitch = pixel_value & 0x0F
+
+    roll = (quantized_roll / 15) * 30 - 15
+    pitch = (quantized_pitch / 15) * 30 - 15
+
+    return roll, pitch
+
+
+def train(rank, world_size, images_root_path, labels_root_path):
+
+    setup(rank, world_size)
+
+    dataset = CustomDataset(
+        images_root=images_root_path,
+        labels_root=labels_root_path,
+    )
+    print(len(dataset))
+
+    # Determine sizes for training and validation sets
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+
+    # Split the dataset into training and validation sets
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
+    inference_dataloader = DataLoader(
+        val_dataset, batch_size=1, shuffle=False, num_workers=0
+    )
+
+    model, criterion, optimizer, scheduler = init_model()
+
+    model = torch.load(
+        "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_multi_angle.pth",
+    )
+    model = model.module
+
+    model.to("cuda")
+
+    scaling_factor = 10e3
+
+    model.eval()  # Set the model to evaluation mode
+    validation_loss = 0.0
+
+    with torch.no_grad():  # Disable gradient computation
+        for images, labels, labels_angle, mask, raw_numpy in inference_dataloader:
+            images, labels, labels_angle, mask = (
+                images.to(rank),
+                labels.to(rank),
+                labels_angle.to(rank),
+                mask.to(rank),
+            )
+            depth_out, affordance_map_out, affordance_map_angle_out = model(
+                images, mask
+            )
+
+            loss = criterion(affordance_map_out, labels)
+            loss_angle = criterion(affordance_map_angle_out, labels_angle)
+            print(
+                affordance_map_out.shape,
+                labels.shape,
+                affordance_map_angle_out.shape,
+                labels_angle.shape,
+            )
+            affordance_map_out = affordance_map_out.squeeze(0).squeeze(0)
+            labels = labels.squeeze(0).squeeze(0)
+            affordance_map_angle_out = affordance_map_angle_out.squeeze(0).squeeze(0)
+            labels_angle = labels_angle.squeeze(0).squeeze(0)
+
+            # Find the index of the maximum value in affordance_map_out
+            affordance_map_out = affordance_map_out.detach().cpu().numpy()
+            max_idx = np.unravel_index(
+                affordance_map_out.argmax(), affordance_map_out.shape
+            )
+            max_y, max_x = max_idx  # Coordinates of the maximum value
+
+            print(labels_angle[max_y, max_x], affordance_map_angle_out[max_y, max_x])
+
+            print(
+                "actual angle",
+                decode_roll_pitch(
+                    (labels_angle[max_y, max_x] * 255)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.uint8)
+                ),
+            )
+            print(
+                "predicted angle",
+                decode_roll_pitch(
+                    (affordance_map_angle_out[max_y, max_x] * 255)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.uint8)
+                ),
+            )
+
+            half_window = 3 // 2
+            # Extract a window around the maximum coordinate
+            y_start = max(0, max_y - half_window)
+            y_end = min(affordance_map_angle_out.shape[0], max_y + half_window + 1)
+            x_start = max(0, max_x - half_window)
+            x_end = min(affordance_map_angle_out.shape[1], max_x + half_window + 1)
+
+            # Get the pixels in the window
+            window_labels_angle = labels_angle[y_start:y_end, x_start:x_end]
+            window_affordance_map_angle_out = affordance_map_angle_out[
+                y_start:y_end, x_start:x_end
+            ]
+
+            # Compute the average values
+            avg_labels_angle = window_labels_angle.mean()
+            avg_affordance_map_angle_out = window_affordance_map_angle_out.mean()
+
+            # Decode the average values to get the angles
+            actual_angle = decode_roll_pitch(
+                (avg_labels_angle * 255).detach().cpu().numpy().astype(np.uint8)
+            )
+            predicted_angle = decode_roll_pitch(
+                (avg_affordance_map_angle_out * 255)
+                .detach()
+                .cpu()
+                .numpy()
+                .astype(np.uint8)
+            )
+
+            print("actual angle", actual_angle)
+            print("predicted angle", predicted_angle)
+
+            fig, axs = plt.subplots(1, 5, figsize=(12, 3))
+            # Plot the first subplot
+            axs[0].imshow(affordance_map_out)
+            axs[0].add_patch(
+                plt.Circle((max_x, max_y), radius=2, color="red", fill=True)
+            )
+            axs[0].axis("off")
+
+            labels = labels.detach().cpu().numpy()
+            max_idx = np.unravel_index(labels.argmax(), labels.shape)
+            max_y, max_x = max_idx  # Coordinates of the maximum value
+            axs[1].imshow(labels)
+            axs[1].add_patch(
+                plt.Circle((max_x, max_y), radius=2, color="red", fill=True)
+            )
+            axs[1].axis("off")
+
+            axs[2].imshow(affordance_map_angle_out.detach().cpu().numpy())
+            axs[2].axis("off")
+
+            axs[3].imshow(labels_angle.detach().cpu().numpy())
+            axs[3].axis("off")
+
+            axs[4].imshow(raw_numpy.squeeze(0))
+            axs[4].axis("off")
+
+            plt.tight_layout()  # Adjust subplots to fit into the figure area.
+            plt.show()
+            scaled_loss = loss * scaling_factor + loss_angle * scaling_factor
+
+            validation_loss += scaled_loss.item()
+
+            # progress_bar.update(1)
+    avg_validation_loss = validation_loss / len(inference_dataloader)
+    print(f"Validation Loss: {avg_validation_loss}")
+
+    cleanup()
+
+
+if __name__ == "__main__":
+    # Set the start method to 'spawn'
+    mp.set_start_method("fork", force=True)
+
+    world_size = torch.cuda.device_count()
+
+    images_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp"
+    labels_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/labels_nbv_3F_angle_2"
+
+    train(0, world_size, images_root, labels_root)
+
+    # Example training loop
+    mp.spawn(
+        train, args=(world_size, images_root, labels_root), nprocs=world_size, join=True
+    )

@@ -146,6 +146,15 @@ class CustomDataset(Dataset):
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
 
+
+        numpy_mask = cv2.imread(segmask_file, 0)
+        match = re.search(self.pattern, label_file)
+        mask_id = match.group(1)
+        numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
+        numpy_mask = numpy_mask == int(mask_id)
+        mask = torch.from_numpy(numpy_mask).unsqueeze(0)
+        mask = self.resize_transform(mask)
+
         # Load label
         label = Image.open(label_file).convert("L")
         numpy_label = np.array(label)
@@ -154,18 +163,28 @@ class CustomDataset(Dataset):
 
         label_angle = Image.open(label_angle_file).convert("L")
         numpy_label_angle = np.array(label_angle)
-        label_angle = torch.from_numpy(numpy_label_angle).unsqueeze(0).float().div(255)
-        label_angle = self.resize_transform(label_angle)
+        numpy_label_angle[(numpy_label_angle == 0) | (numpy_label_angle == 255)] = 119
+        numpy_label_angle = numpy_label_angle*numpy_mask
+        label_angle = torch.from_numpy(numpy_label_angle).unsqueeze(0)
+        label_angle = self.resize_transform(label_angle).squeeze(0)
+        label_angle_pitch, label_angle_roll = self.decode_roll_pitch(label_angle)
 
-        numpy_mask = cv2.imread(segmask_file, 0)
-        match = re.search(self.pattern, label_file)
-        mask_id = match.group(1)
-        numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
-        mask = numpy_mask == int(mask_id)
-        mask = torch.from_numpy(mask).unsqueeze(0)
-        mask = self.resize_transform(mask)
+        label_angle_pitch = self.encode_roll_pitch(label_angle_pitch).unsqueeze(0).float().div(255)
+        label_angle_roll = self.encode_roll_pitch(label_angle_roll).unsqueeze(0).float().div(255)
 
-        return image, label, label_angle, mask
+
+        return image, label, label_angle_pitch, label_angle_roll, mask
+    
+    def decode_roll_pitch(self, pixel_value):
+        quantized_roll = (pixel_value >> 4) & 0x0F
+        quantized_pitch = pixel_value & 0x0F
+        roll = (quantized_roll / 15.0) * 30.0 - 15.0
+        pitch = (quantized_pitch / 15.0) * 30.0 - 15.0
+        return pitch, roll
+    
+    def encode_roll_pitch(self, angle):
+        normalized_angle = (angle + 15) / 30
+        return normalized_angle
 
     def __len__(self):
         return len(self.image_label_pairs)
@@ -305,15 +324,16 @@ def train(rank, world_size, images_root_path, labels_root_path):
         sampler_train.set_epoch(epoch)
         sampler_val.set_epoch(epoch)
 
-        for images, labels, labels_angle, mask in train_dataloader:
-            images, labels, labels_angle, mask = images.to(rank), labels.to(rank), labels_angle.to(rank), mask.to(rank)
+        for images, labels, labels_angle_pitch, labels_angle_roll, mask in train_dataloader:
+            images, labels, labels_angle_pitch, labels_angle_roll, mask = images.to(rank), labels.to(rank), labels_angle_pitch.to(rank), labels_angle_roll.to(rank), mask.to(rank)
             optimizer.zero_grad()
 
-            depth_out, affordance_map_out, affordance_map_angle_out = model(images, mask)
+            depth_out, affordance_map_out, affordance_map_pitch_out, affordance_map_roll_out = model(images, mask)
 
             loss = criterion(affordance_map_out, labels)
-            loss_angle = criterion(affordance_map_angle_out, labels_angle)
-            scaled_loss = loss * scaling_factor + loss_angle * scaling_factor
+            loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
+            loss_angle_roll  = criterion(affordance_map_roll_out, labels_angle_roll)
+            scaled_loss = loss * scaling_factor + loss_angle_pitch * scaling_factor + loss_angle_roll * scaling_factor
 
             scaled_loss.backward()
             optimizer.step()
@@ -330,13 +350,14 @@ def train(rank, world_size, images_root_path, labels_root_path):
         validation_loss = 0.0
 
         with torch.no_grad():  # Disable gradient computation
-            for images, labels, labels_angle, mask in val_dataloader:
-                images, labels, labels_angle, mask = images.to(rank), labels.to(rank), labels_angle.to(rank), mask.to(rank)
-                depth_out, affordance_map_out, affordance_map_angle_out = model(images, mask)
+            for images, labels, labels_angle_pitch, labels_angle_roll, mask in val_dataloader:
+                images, labels, labels_angle_pitch, labels_angle_roll, mask = images.to(rank), labels.to(rank), labels_angle_pitch.to(rank), labels_angle_roll.to(rank), mask.to(rank)
+                depth_out, affordance_map_out, affordance_map_pitch_out, affordance_map_roll_out = model(images, mask)
 
                 loss = criterion(affordance_map_out, labels)
-                loss_angle = criterion(affordance_map_angle_out, labels_angle)
-                scaled_loss = loss * scaling_factor + loss_angle * scaling_factor
+                loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
+                loss_angle_roll  = criterion(affordance_map_roll_out, labels_angle_roll)
+                scaled_loss = loss * scaling_factor + loss_angle_pitch * scaling_factor + loss_angle_roll * scaling_factor
 
                 validation_loss += scaled_loss.item()
 
@@ -344,10 +365,10 @@ def train(rank, world_size, images_root_path, labels_root_path):
         avg_validation_loss = validation_loss / len(val_dataloader)
         if rank == 0 and avg_validation_loss < lowest_loss:
             lowest_loss = avg_validation_loss
-            torch.save(
-                model,
-                "/home/ubuntu/checkpoint_multi_angle.pth",
-            )
+            # torch.save(
+            #     model,
+            #     "/home/ubuntu/checkpoint_multi_angle.pth",
+            # )
         if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
 
@@ -366,7 +387,7 @@ if __name__ == "__main__":
 
     world_size = torch.cuda.device_count()
 
-    images_root="/home/ubuntu/compress_observation_2_gp"
+    images_root="/home/ubuntu/observation_data_nbv_3F_2"
     labels_root="/home/ubuntu/labels_nbv_3F_angle_2"
 
     # Example training loop

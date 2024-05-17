@@ -166,20 +166,21 @@ def apply_rotation(point_cloud, normals, pitch, roll, device="cuda"):
 def encode_roll_pitch(roll, pitch):
     normalized_roll = (roll + 15) / 30
     normalized_pitch = (pitch + 15) / 30
-    
+
     quantized_roll = int(normalized_roll * 15)
     quantized_pitch = int(normalized_pitch * 15)
-    
+
     pixel_value = (quantized_roll << 4) | quantized_pitch
     return pixel_value
+
 
 def decode_roll_pitch(pixel_value):
     quantized_roll = (pixel_value >> 4) & 0x0F
     quantized_pitch = pixel_value & 0x0F
-    
+
     roll = (quantized_roll / 15) * 30 - 15
     pitch = (quantized_pitch / 15) * 30 - 15
-    
+
     return roll, pitch
 
 
@@ -249,10 +250,12 @@ class CustomDataset(Dataset):
             "14": [(192, 71), (402, 54), (402, 263), (175, 253)],
         }
 
-        self.pitch_angle = np.linspace(-np.pi / 12, np.pi / 12, 31)
-        self.roll_angle = np.linspace(-np.pi / 12, np.pi / 12, 31)
-        print(self.pitch_angle*180/np.pi)
-        print(self.roll_angle*180/np.pi)
+        positive_range = np.linspace(0, np.pi / 6, 7)
+        negative_range = np.linspace(-np.pi / 6, 0, 7)
+        self.pitch_angle = np.concatenate((positive_range, negative_range[1:]))
+        self.roll_angle = np.concatenate((positive_range, negative_range[1:]))
+        print(self.pitch_angle * 180 / np.pi)
+        print(self.roll_angle * 180 / np.pi)
 
     def _get_image_label_pairs(self):
         pairs = []
@@ -269,7 +272,7 @@ class CustomDataset(Dataset):
                     base_name = os.path.splitext(os.path.basename(image_file))[0]
                     count = base_name.split("_")[-1]
                     view_number = base_name.split("_")[-2]
-                    
+
                     segmask_file = image_file.replace("rgb", "segmask")
                     depth_image_file = image_file.replace("rgb", "depth_image").replace(
                         ".png", ".npz"
@@ -281,7 +284,9 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         # print(idx)
-        image_file, depth_image_file, segmask_file, view_number = self.image_label_pairs[idx]
+        image_file, depth_image_file, segmask_file, view_number = (
+            self.image_label_pairs[idx]
+        )
         # print(image_file, depth_image_file, segmask_file, view_number)
         crop_bin_dim = self.crop_bin_dim_dict[str(view_number)]
 
@@ -299,7 +304,7 @@ class CustomDataset(Dataset):
         numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
         segmask_cropped = torch.from_numpy(numpy_mask).cuda()
 
-        affordance_map_path = "" 
+        affordance_map_path = ""
         affordance_map_angle_path = ""
 
         mask_numbers = torch.unique(segmask_cropped)
@@ -308,8 +313,8 @@ class CustomDataset(Dataset):
         segmask_cropped = F.pad(segmask_cropped, padding_size, "constant", 0)
         depth_image_cropped = F.pad(depth_image_cropped, padding_size, "constant", 0)
 
-        temp_path = (
-            image_file.replace("observation_data_nbv_3F", "labels_nbv_3F_angle")
+        temp_path = image_file.replace(
+            "observation_data_nbv_3F", "labels_nbv_3F_angle_30"
         )
 
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
@@ -330,7 +335,9 @@ class CustomDataset(Dataset):
                     continue
                 mask_indices = segmask_cropped == mask_number
                 depth_image_masked = torch.where(
-                    mask_indices, depth_image_cropped, torch.tensor(0).to(torch.float16).cuda()
+                    mask_indices,
+                    depth_image_cropped,
+                    torch.tensor(0).to(torch.float16).cuda(),
                 )
 
                 depth_image_normal = depth_image_masked
@@ -347,10 +354,28 @@ class CustomDataset(Dataset):
                 angle_scores = None
                 flag_first_angle = True
 
+                affordance_map_path = (
+                    image_file.replace("rgb", f"affordance_map_{mask_number}")
+                    .replace(".npy", ".png")
+                    .replace("observation_data_nbv_3F", "labels_nbv_3F_angle_30")
+                )
+                affordance_map_angle_path = (
+                    image_file.replace("rgb", f"affordance_map_angle_{mask_number}")
+                    .replace(".npy", ".png")
+                    .replace("observation_data_nbv_3F", "labels_nbv_3F_angle_30")
+                )
+
+                if os.path.exists(affordance_map_path) and os.path.exists(
+                    affordance_map_angle_path
+                ):
+                    continue
+
                 for pitch in self.pitch_angle:
                     for roll in self.roll_angle:
-                        point_cloud_im_rotated, normal_cloud_im_rotated = apply_rotation(
-                            point_cloud_flat, normal_cloud_flat, pitch, roll
+                        point_cloud_im_rotated, normal_cloud_im_rotated = (
+                            apply_rotation(
+                                point_cloud_flat, normal_cloud_flat, pitch, roll
+                            )
                         )
                         depth_image_masked_rotated = update_depth(
                             point_cloud_im_rotated, initial_shape
@@ -424,7 +449,9 @@ class CustomDataset(Dataset):
                         depth_values = depth_image_masked_rotated[
                             y_coords_int, x_coords_int
                         ]
-                        normal_values = normal_cloud_im_rotated[y_coords_int, x_coords_int]
+                        normal_values = normal_cloud_im_rotated[
+                            y_coords_int, x_coords_int
+                        ]
 
                         # Compute the reference normal and scores
                         reference_normals = torch.mean(normal_values, dim=1)
@@ -467,14 +494,17 @@ class CustomDataset(Dataset):
                         num_measurements = depth_values.shape[1]
                         batch_size = depth_values.shape[0]
                         # Spacing calculation assuming angle_resolution is defined
-                        spacing = torch.tensor(int(90 / angle_resolution), device="cuda:0")
+                        spacing = torch.tensor(
+                            int(90 / angle_resolution), device="cuda:0"
+                        )
                         indices = (
                             torch.arange(num_measurements, device="cuda:0").unsqueeze(0)
                             + spacing
                         ) % num_measurements
                         indices_repeated = indices.expand(batch_size, -1)
                         differences = torch.abs(
-                            depth_values - torch.gather(depth_values, 1, indices_repeated)
+                            depth_values
+                            - torch.gather(depth_values, 1, indices_repeated)
                         )
                         cost = 10 * angle_resolution * differences.sum(dim=1)
 
@@ -502,15 +532,21 @@ class CustomDataset(Dataset):
                             best_score = torch.zeros_like(final_scores)
                             angle_scores = torch.zeros_like(final_scores)
                             flag_first_angle = False
-                        
+
                         greater = final_scores > best_score
 
                         # best_score = torch.max(best_score, final_scores)
                         best_score[greater] = final_scores[greater]
-                        encoded_value = encode_roll_pitch(roll*180/torch.pi, pitch*180/torch.pi)
-                        angle_scores[greater] = torch.tensor(encoded_value).to(torch.float32).cuda()
+                        encoded_value = encode_roll_pitch(
+                            roll * 180 / torch.pi, pitch * 180 / torch.pi
+                        )
+                        angle_scores[greater] = (
+                            torch.tensor(encoded_value).to(torch.float32).cuda()
+                        )
 
-                num_zero_values_per_batch = torch.count_nonzero(depth_values == 0, axis=1)
+                num_zero_values_per_batch = torch.count_nonzero(
+                    depth_values == 0, axis=1
+                )
                 total_elements_per_batch = depth_values.shape[1]
                 percentage_zero_per_batch = (
                     num_zero_values_per_batch / total_elements_per_batch
@@ -524,51 +560,38 @@ class CustomDataset(Dataset):
                 affordance_map[base_coordinates[:, 1], base_coordinates[:, 0]] = (
                     (best_score * 255 / 100).round().to(torch.uint8)
                 )
-                affordance_map_angles[base_coordinates[:, 1], base_coordinates[:, 0]] = (
-                    (angle_scores).round().to(torch.uint8)
-                )
+                affordance_map_angles[
+                    base_coordinates[:, 1], base_coordinates[:, 0]
+                ] = ((angle_scores).round().to(torch.uint8))
 
                 affordance_map = affordance_map[
-                    padding_size[0] : -padding_size[1], padding_size[2] : -padding_size[3]
+                    padding_size[0] : -padding_size[1],
+                    padding_size[2] : -padding_size[3],
                 ]
                 affordance_map_angles = affordance_map_angles[
-                    padding_size[0] : -padding_size[1], padding_size[2] : -padding_size[3]
+                    padding_size[0] : -padding_size[1],
+                    padding_size[2] : -padding_size[3],
                 ]
 
-                affordance_map_path = (
-                    image_file.replace("rgb", f"affordance_map_{mask_number}")
-                    .replace(".npy", ".png")
-                    .replace("observation_data_nbv_3F", "labels_nbv_3F_angle")
-                )
-                affordance_map_angle_path = (
-                    image_file.replace("rgb", f"affordance_map_angle_{mask_number}")
-                    .replace(".npy", ".png")
-                    .replace("observation_data_nbv_3F", "labels_nbv_3F_angle")
-                )
-
-                # plt.imshow(affordance_map.cpu().numpy())
-                # plt.show()
-                # plt.imshow(affordance_map_angles.cpu().numpy())
-                # plt.show()
-
                 cv2.imwrite(affordance_map_path, affordance_map.cpu().numpy())
-                cv2.imwrite(affordance_map_angle_path, affordance_map_angles.cpu().numpy())
+                cv2.imwrite(
+                    affordance_map_angle_path, affordance_map_angles.cpu().numpy()
+                )
 
         return affordance_map_path, affordance_map_angle_path
 
     def __len__(self):
         return len(self.image_label_pairs)
 
+
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
 
     dataset = CustomDataset(
-        images_root = "/home/ubuntu/observation_data_nbv_3F_2"
+        images_root="/home/ubuntu/observation_data_nbv_3F_2"
     )
 
-    process_dataloader = DataLoader(
-        dataset, batch_size=1, shuffle=False, num_workers=12
-    )
+    process_dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=8)
 
     count = 0
     for affordance_map_path, affordance_map_angle_path in process_dataloader:
