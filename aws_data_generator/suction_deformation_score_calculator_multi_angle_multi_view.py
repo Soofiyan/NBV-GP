@@ -598,12 +598,12 @@ def collect_data(rank, world_size, images_root_path):
 
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
 
-    # Determine sizes for training and validation sets
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-
     process_dataloader = DataLoader(
-        dataset, batch_size=1, shuffle=False, num_workers=32
+        dataset,
+        batch_size=32,
+        sampler=sampler,
+        num_workers=32,
+        pin_memory=False,
     )
 
     count = 0
