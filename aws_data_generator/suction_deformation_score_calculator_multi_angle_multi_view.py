@@ -227,15 +227,10 @@ class CustomDataset(Dataset):
             "14": [(192, 71), (402, 54), (402, 263), (175, 253)],
         }
 
-        positive_range = np.linspace(0, np.pi / 6, 7)
-        negative_range = np.linspace(-np.pi / 6, 0, 7)
-        self.pitch_angle = np.concatenate((positive_range, negative_range[1:]))
-        self.roll_angle = np.concatenate((positive_range, negative_range[1:]))
-        print(self.pitch_angle * 180 / np.pi)
-        print(self.roll_angle * 180 / np.pi)
-
-        self.roll_unsorted = list(range(-30, 31, 5))
-        self.pitch_unsorted = list(range(-30, 31, 5))
+        positive_range = torch.linspace(0, torch.pi / 6, 7)
+        negative_range = torch.linspace(-torch.pi / 6, 0, 7)
+        self.pitch_angle = torch.concatenate((positive_range, negative_range[:-1]))
+        self.roll_angle = torch.concatenate((positive_range, negative_range[:-1]))
 
     def _get_image_label_pairs(self):
         pairs = []
