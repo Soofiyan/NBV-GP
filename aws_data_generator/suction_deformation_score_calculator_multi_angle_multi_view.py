@@ -458,7 +458,7 @@ class CustomDataset(Dataset):
                             (angles_between_vectors.shape[0], 1), device="cuda"
                         ).fill_(torch.deg2rad(torch.tensor(45, device="cuda")))
                         scores = torch.maximum(
-                            torch.tensor(0, device="cuda:0"),
+                            torch.tensor(0).cuda(),
                             angle_threshold - angles_between_vectors,
                         )
                         normalized_scores = scores / angle_threshold * 100
@@ -474,7 +474,7 @@ class CustomDataset(Dataset):
                             / torch.pi
                         )
                         angle_inclined_score = (
-                            (torch.tensor(75).to("cuda:0") - angle_inclined) * 100 / 75
+                            (torch.tensor(75).cuda() - angle_inclined) * 100 / 75
                         )
 
                         # Depth variability
@@ -485,10 +485,9 @@ class CustomDataset(Dataset):
                         batch_size = depth_values.shape[0]
                         # Spacing calculation assuming angle_resolution is defined
                         spacing = torch.tensor(
-                            int(90 / angle_resolution), device="cuda:0"
-                        )
+                            int(90 / angle_resolution)).cuda()
                         indices = (
-                            torch.arange(num_measurements, device="cuda:0").unsqueeze(0)
+                            torch.arange(num_measurements).unsqueeze(0).cuda()
                             + spacing
                         ) % num_measurements
                         indices_repeated = indices.expand(batch_size, -1)
@@ -499,7 +498,7 @@ class CustomDataset(Dataset):
                         cost = 10 * angle_resolution * differences.sum(dim=1)
 
                         # Anomaly scores and normalization
-                        max_anomaly_score = torch.tensor(20.0, device="cuda:0")
+                        max_anomaly_score = torch.tensor(20.0).cuda()
                         expected_depth, _ = torch.max(depth_values, dim=1, keepdim=True)
                         anomaly_scores = expected_depth - depth_values
                         sum_of_anomaly_scores = torch.sum(anomaly_scores, dim=1)
@@ -597,13 +596,13 @@ def collect_data(rank, world_size, images_root_path):
 
     dataset = CustomDataset(images_root=images_root_path)
 
-    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)
 
     process_dataloader = DataLoader(
         dataset,
         batch_size=1,
         sampler=sampler,
-        num_workers=16,
+        num_workers=12,
         pin_memory=False,
     )
 
