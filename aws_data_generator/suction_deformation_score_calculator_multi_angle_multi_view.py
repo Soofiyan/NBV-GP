@@ -38,7 +38,7 @@ def zero_pixels(data):
     return zero_px
 
 
-def normal_cloud_project(data, ksize=3):
+def normal_cloud_project(rank, data, ksize=3):
     height = data.shape[0]
     width = data.shape[1]
 
@@ -49,12 +49,12 @@ def normal_cloud_project(data, ksize=3):
     sobel_x = (
         torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
         .view(1, 1, 3, 3)
-        .cuda()
+        .to(rank)
     )
     sobel_y = (
         torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)
         .view(1, 1, 3, 3)
-        .cuda()
+        .to(rank)
     )
 
     # Assuming data is in shape [H, W, C], we need it in [B, C, H, W] format where B is batch size
@@ -92,16 +92,16 @@ def normal_cloud_project(data, ksize=3):
     pc_grads[zero_norm_mask] = torch.tensor([0, 0, -1.0], device=pc_grads.device)
 
     # Reshape
-    normal_im_data = pc_grads.reshape(height, width, 3).cuda()
+    normal_im_data = pc_grads.reshape(height, width, 3).to(rank)
 
     # preserve zeros
-    zero_px = zero_pixels(data).cuda()
-    normal_im_data[zero_px[:, 0], zero_px[:, 1], :] = torch.zeros(3).cuda()
+    zero_px = zero_pixels(data).to(rank)
+    normal_im_data[zero_px[:, 0], zero_px[:, 1], :] = torch.zeros(3).to(rank)
 
     return normal_im_data
 
 
-def deproject(depth_image):
+def deproject(rank, depth_image):
     height = depth_image.shape[0]
     width = depth_image.shape[1]
     _K = torch.tensor(
@@ -114,24 +114,24 @@ def deproject(depth_image):
 
     height, width = depth_image.shape
     row_indices, col_indices = torch.meshgrid(
-        torch.arange(height, device=depth_image.device),
-        torch.arange(width, device=depth_image.device),
+        torch.arange(height, device=rank),
+        torch.arange(width, device=rank),
         indexing="ij",
     )
     pixels = torch.stack((col_indices.flatten(), row_indices.flatten()), dim=0)
     pixels_homog = torch.cat(
-        (pixels, torch.ones(1, pixels.shape[1], device=depth_image.device)), dim=0
-    ).cuda()
-    depth_arr = depth_image.flatten().repeat(3, 1).cuda()
-    _K_inv = torch.linalg.inv(_K).cuda()
+        (pixels, torch.ones(1, pixels.shape[1], device=rank)), dim=0
+    ).to(rank)
+    depth_arr = depth_image.flatten().repeat(3, 1).to(rank)
+    _K_inv = torch.linalg.inv(_K).to(rank)
     points_3d = _K_inv @ (pixels_homog * depth_arr)
     return points_3d
 
 
-def deproject_to_image(depth_image):
+def deproject_to_image(rank, depth_image):
     height = depth_image.shape[0]
     width = depth_image.shape[1]
-    point_cloud = deproject(depth_image)
+    point_cloud = deproject(rank, depth_image)
     point_cloud_im_data = point_cloud.T.reshape(height, width, 3)
     return point_cloud_im_data
 
@@ -325,8 +325,8 @@ class CustomDataset(Dataset):
 
                 depth_image_normal = depth_image_masked
 
-                point_cloud_im = deproject_to_image(depth_image_normal).to(self.rank)
-                normal_cloud_im = normal_cloud_project(point_cloud_im).to(self.rank)
+                point_cloud_im = deproject_to_image(self.rank, depth_image_normal).to(self.rank)
+                normal_cloud_im = normal_cloud_project(self.rank, point_cloud_im).to(self.rank)
 
                 initial_shape = point_cloud_im.shape
 
