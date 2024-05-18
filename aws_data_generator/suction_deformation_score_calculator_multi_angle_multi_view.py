@@ -592,6 +592,14 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
+def print_memory_usage(rank):
+    print(f"Rank {rank}: Allocated memory: {torch.cuda.memory_allocated(rank)} bytes")
+    print(f"Rank {rank}: Reserved memory: {torch.cuda.memory_reserved(rank)} bytes")
+import gc
+
+def collect_garbage():
+    gc.collect()
+    torch.cuda.empty_cache()
 
 def collect_data(rank, world_size, images_root_path):
     setup(rank, world_size)
@@ -612,6 +620,14 @@ def collect_data(rank, world_size, images_root_path):
     for affordance_map_path, affordance_map_roll_path, affordance_map_pitch_path in process_dataloader:
         print(count)
         count += 1
+
+        print_memory_usage(rank)
+        
+        # Explicitly delete or move tensors out of scope to free memory
+        del affordance_map_path, affordance_map_roll_path, affordance_map_pitch_path
+        
+        # Collect garbage
+        collect_garbage()
     
     cleanup()
 
