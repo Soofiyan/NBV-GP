@@ -604,7 +604,7 @@ def collect_data(rank, world_size, images_root_path):
         dataset,
         batch_size=1,
         sampler=sampler,
-        num_workers=12,
+        num_workers=18,
         pin_memory=False,
     )
 
