@@ -337,7 +337,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
         validation_loss = 0.0
 
         with torch.no_grad():  # Disable gradient computation
-            for images, labels, labels_angle_roll, labels_angle_pitch, mask in train_dataloader:
+            for images, labels, labels_angle_roll, labels_angle_pitch, mask in val_dataloader:
                 images, labels, labels_angle_roll, labels_angle_pitch, mask = images.to(rank), labels.to(rank), labels_angle_roll.to(rank), labels_angle_pitch.to(rank), mask.to(rank)
                 depth_out, affordance_map_out, affordance_map_roll_out, affordance_map_pitch_out = model(images, mask)
 
