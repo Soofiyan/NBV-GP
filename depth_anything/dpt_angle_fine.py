@@ -319,7 +319,7 @@ class DPTHead(nn.Module):
         affordance_out = self.scratch.affordance_sigmoid(affordance_out)
         affordance_out_pitch = self.scratch.affordance_sigmoid(affordance_out_pitch)
         affordance_out_roll = self.scratch.affordance_sigmoid(affordance_out_roll)
-
+        
         affordance_out = affordance_out * mask.float()
         affordance_out_pitch = affordance_out_pitch * mask.float()
         affordance_out_roll = affordance_out_roll * mask.float()

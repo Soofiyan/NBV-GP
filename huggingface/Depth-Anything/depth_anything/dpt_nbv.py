@@ -199,7 +199,7 @@ class DPTHead(nn.Module):
         ######################################################################################################
 
         self.scratch.affordance_initial_conv = nn.Conv2d(
-            head_features_1 + 1, head_features_1 // 2, kernel_size=3, padding=1
+            head_features_1, head_features_1 // 2, kernel_size=3, padding=1
         )
         self.scratch.affordance_initial_bn = nn.BatchNorm2d(head_features_1 // 2)
         self.scratch.affordance_relu = nn.ReLU(inplace=True)
@@ -253,13 +253,15 @@ class DPTHead(nn.Module):
 
 
         self.scratch.nbv_adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.scratch.affordance_sigmoid = nn.Sigmoid()
         
         self.scratch.flatten = nn.Flatten()
-        self.scratch.nbv_fc1 = nn.Linear(224*224, 512)  # You can adjust the size and number of these layers
-        self.scratch.nbv_fc2 = nn.Linear(512, 2)  # Outputs two coordinates (x, y)
+        self.scratch.nbv_fc1 = nn.Linear(224*224, 1024)  # You can adjust the size and number of these layers
+        self.scratch.nbv_fc2 = nn.Linear(1024, 5)
         self.scratch.nbv_relu = nn.ReLU()
+        self.scratch.nbv_classifier = nn.Linear(1024, 2)
+        self.scratch.nbv_softmax = nn.Softmax(dim=1)
 
-        self.scratch.affordance_sigmoid = nn.Sigmoid()
 
     def forward(self, out_features, patch_h, patch_w, mask):
         out = []
@@ -304,9 +306,10 @@ class DPTHead(nn.Module):
         )
 
         # Concatenate the segmentation mask with patch_1 features
-        patch_1_with_mask = torch.cat((path_1, seg_mask_resized), dim=1)
+        # out_with_mask = torch.cat((out, seg_mask_resized), dim=1)
+        out_with_path_1 = path_1 * seg_mask_resized
 
-        x = self.scratch.affordance_initial_conv(patch_1_with_mask)
+        x = self.scratch.affordance_initial_conv(out_with_path_1)
         x = self.scratch.affordance_initial_bn(x)
         x = self.scratch.affordance_relu(x)
         x = self.scratch.affordance_attention(x)  # Apply simplified self-attention here
@@ -322,15 +325,15 @@ class DPTHead(nn.Module):
         # x = self.scratch.affordance_feature_extraction(x)
 
         x = self.scratch.affordance_final_conv(x)
-        x = self.scratch.affordance_sigmoid(x)
+        # x = self.scratch.affordance_sigmoid(x)
         x = self.scratch.flatten(x)
         
         # Fully connected layers
-        x = self.scratch.nbv_fc1(x)
-        x = self.scratch.nbv_relu(x)  # Using ReLU for non-linearity
-        nbv = self.scratch.nbv_fc2(x)
+        coordinates = self.scratch.nbv_fc1(x)
+        coordinates = self.scratch.nbv_relu(coordinates)  # Using ReLU for non-linearity
+        coordinates = self.scratch.nbv_fc2(coordinates)
 
-        return nbv
+        return coordinates
 
 
 class DPT_DINOv2(nn.Module):

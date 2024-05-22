@@ -156,7 +156,7 @@ def init_model():
     model = model.to("cuda")
 
     for name, param in model.named_parameters():
-        if "nbv" not in name:
+        if "pretrained" in name or "depth_head.scratch.output_conv" in name:
             param.requires_grad = False
 
     criterion = torch.nn.HuberLoss()
@@ -164,7 +164,7 @@ def init_model():
     #     filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-1
     # )
     optimizer = torch.optim.Adam(
-        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3
+        filter(lambda p: p.requires_grad, model.parameters()), lr=5e-4
     )
 
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=5)
@@ -174,40 +174,23 @@ def init_model():
 
 def train(train_dataloader, val_dataloader):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_epoch = 200
+    num_epoch = 10
 
     model, criterion, optimizer, scheduler = init_model()
+
+    model.state_dict = torch.load("/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/checkpoint_finetune_nbv_9_views.pth")
     # progress_bar = tqdm(range(num_epoch*len(train_dataloader) + num_epoch*len(val_dataloader)))
 
     running_loss = 0.0
 
-    scaling_factor = 1e2
+    scaling_factor = 10e3
 
     model.train()
 
     lowest_loss = 10000.0
 
-    for epoch in range(num_epoch):
+    for _ in range(num_epoch):
         running_loss = 0.0
-
-        for images, label_x_y, mask in train_dataloader:
-            images, label_x_y, mask = images.to(device), label_x_y.to(device), mask.to(device)
-            optimizer.zero_grad()
-
-            nbv_out = model(images, mask)
-            label_x_y = label_x_y.squeeze()
-            # labels = labels.squeeze().type(torch.float).cuda()
-            loss = criterion(nbv_out, label_x_y).requires_grad_(True)
-            scaled_loss = loss * scaling_factor
-
-            scaled_loss.backward()
-            optimizer.step()
-            running_loss += scaled_loss.item()
-
-            # progress_bar.update(1)
-            # print(f"Loss: {loss.item()}")
-        epoch_loss = running_loss / len(train_dataloader)
-        print(f"Epoch {epoch + 1}, Loss: {epoch_loss}")
 
         model.eval()  # Set the model to evaluation mode
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -223,6 +206,7 @@ def train(train_dataloader, val_dataloader):
 
                 nbv_out = model(images, mask)
                 label_x_y = label_x_y.squeeze()
+                print(nbv_out, label_x_y)
                 loss = criterion(nbv_out, label_x_y)
                 scaled_loss = loss * scaling_factor
 
@@ -230,12 +214,6 @@ def train(train_dataloader, val_dataloader):
                 # progress_bar.update(1)
         avg_validation_loss = validation_loss / len(val_dataloader)
         print(f"Validation Loss: {avg_validation_loss}")
-        if avg_validation_loss < lowest_loss:
-            lowest_loss = avg_validation_loss
-            torch.save(
-                model,
-                "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/checkpoint_finetune_nbv_9_views.pth",
-            )
 
         model.train()
 
@@ -254,17 +232,17 @@ if __name__ == "__main__":
     print(len(dataset))
 
     # Determine sizes for training and validation sets
-    train_size = int(0.8 * len(dataset))
+    train_size = int(0.99 * len(dataset))
     val_size = len(dataset) - train_size
 
     # Split the dataset into training and validation sets
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=32, shuffle=True, num_workers=0
+        train_dataset, batch_size=1, shuffle=True, num_workers=0
     )
     val_dataloader = DataLoader(
-        val_dataset, batch_size=32, shuffle=False, num_workers=0
+        val_dataset, batch_size=1, shuffle=False, num_workers=0
     )
 
     # Example training loop
