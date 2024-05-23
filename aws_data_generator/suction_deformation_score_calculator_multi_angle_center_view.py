@@ -240,7 +240,7 @@ class CustomDataset(Dataset):
         return pairs
 
     def __getitem__(self, idx):
-        image_file, depth_image_file, segmask_file, view_number = (
+        image_file, depth_image_file, segmask_file = (
             self.image_label_pairs[idx]
         )
         # print(image_file, depth_image_file, segmask_file, view_number)
