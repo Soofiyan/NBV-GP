@@ -229,7 +229,7 @@ class CustomDataset(Dataset):
                     count = base_name.split("_")[-1]
 
                     segmask_file = image_file.replace("rgb", "segmask").replace(
-                        ".png", ".npy"
+                        ".jpg", ".png"
                     )
                     depth_image_file = (
                         image_file.replace("rgb", "depth_image")
