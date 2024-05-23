@@ -612,7 +612,7 @@ def collect_data(rank, world_size, images_root_path):
         dataset,
         batch_size=1,
         sampler=sampler,
-        num_workers=18,
+        num_workers=16,
         pin_memory=False,
     )
 
@@ -621,13 +621,13 @@ def collect_data(rank, world_size, images_root_path):
         print(count)
         count += 1
 
-        print_memory_usage(rank)
+        # print_memory_usage(rank)
         
         # Explicitly delete or move tensors out of scope to free memory
-        del affordance_map_path, affordance_map_roll_path, affordance_map_pitch_path
+        # del affordance_map_path, affordance_map_roll_path, affordance_map_pitch_path
         
         # Collect garbage
-        collect_garbage()
+        # collect_garbage()
     
     cleanup()
 
