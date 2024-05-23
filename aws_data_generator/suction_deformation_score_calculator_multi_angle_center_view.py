@@ -374,9 +374,9 @@ class CustomDataset(Dataset):
                         # plt.imshow(new_depths.cpu().detach().numpy())
                         # plt.show()
 
-                        affordance_map = torch.zeros_like(segmask_cropped)
-                        affordance_map_roll = torch.zeros_like(segmask_cropped)
-                        affordance_map_pitch = torch.zeros_like(segmask_cropped)
+                        affordance_map = torch.zeros_like(segmask_cropped).to(torch.int)
+                        affordance_map_roll = torch.zeros_like(segmask_cropped).to(torch.int)
+                        affordance_map_pitch = torch.zeros_like(segmask_cropped).to(torch.int)
 
                         non_zero_indices = torch.nonzero(depth_image_masked_rotated)
                         non_zero_coordinates = non_zero_indices[:, [1, 0]]
