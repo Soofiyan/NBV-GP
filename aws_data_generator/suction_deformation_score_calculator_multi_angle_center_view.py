@@ -626,6 +626,8 @@ def collect_data(rank, world_size, images_root_path):
 
     dataset = CustomDataset(rank, images_root=images_root_path)
 
+    print(f"Rank {rank}: Dataset length: {len(dataset)}")
+
     sampler = DistributedSampler(
         dataset, num_replicas=world_size, rank=rank, shuffle=False
     )
