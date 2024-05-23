@@ -122,18 +122,25 @@ class CustomDataset(Dataset):
                         ".jpg", ".png"
                     )
                     for label_file in glob.glob(label_pattern):
-                        if "affordance_map_angle" in label_file:
+                        if (
+                            "affordance_map_roll" in label_file
+                            or "affordance_map_pitch" in label_file
+                        ):
                             continue
                         label_img = Image.open(label_file).convert("L")
-                        label_angle_file = label_file.replace(
-                            "affordance_map", "affordance_map_angle"
+                        label_roll_file = label_file.replace(
+                            "affordance_map", "affordance_map_roll"
+                        )
+                        label_pitch_file = label_file.replace(
+                            "affordance_map", "affordance_map_pitch"
                         )
                         if np.any(np.array(label_img) > 0):
                             pairs.append(
                                 (
                                     image_file,
                                     label_file,
-                                    label_angle_file,
+                                    label_roll_file,
+                                    label_pitch_file,
                                     segmask_file,
                                     view_number,
                                 )
@@ -142,9 +149,14 @@ class CustomDataset(Dataset):
         return pairs
 
     def __getitem__(self, idx):
-        image_file, label_file, label_angle_file, segmask_file, view_number = (
-            self.image_label_pairs[idx]
-        )
+        (
+            image_file,
+            label_file,
+            label_roll_file,
+            label_pitch_file,
+            segmask_file,
+            view_number,
+        ) = self.image_label_pairs[idx]
 
         # Load image
         numpy_image = cv2.imread(image_file).astype(np.uint8)
@@ -152,16 +164,17 @@ class CustomDataset(Dataset):
         crop_bin_dim = self.crop_bin_dim_dict[str(view_number)]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
-        raw_image = (
-            self.resize_transform(torch.from_numpy(numpy_image).permute(2, 0, 1))
-            .permute(1, 2, 0)
-            .detach()
-            .cpu()
-            .numpy()
-        )
         image = torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
+
+        numpy_mask = cv2.imread(segmask_file, 0)
+        match = re.search(self.pattern, label_file)
+        mask_id = match.group(1)
+        numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
+        numpy_mask = numpy_mask == int(mask_id)
+        mask = torch.from_numpy(numpy_mask).unsqueeze(0)
+        mask = self.resize_transform(mask)
 
         # Load label
         label = Image.open(label_file).convert("L")
@@ -169,20 +182,17 @@ class CustomDataset(Dataset):
         label = torch.from_numpy(numpy_label).unsqueeze(0).float().div(255)
         label = self.resize_transform(label)
 
-        label_angle = Image.open(label_angle_file).convert("L")
-        numpy_label_angle = np.array(label_angle)
-        label_angle = torch.from_numpy(numpy_label_angle).unsqueeze(0).float().div(255)
-        label_angle = self.resize_transform(label_angle)
+        label_roll = Image.open(label_roll_file).convert("L")
+        numpy_label_roll = np.array(label_roll)
+        label_roll = torch.from_numpy(numpy_label_roll).unsqueeze(0).float().div(255)
+        label_roll = self.resize_transform(label_roll)
 
-        numpy_mask = cv2.imread(segmask_file, 0)
-        match = re.search(self.pattern, label_file)
-        mask_id = match.group(1)
-        numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
-        mask = numpy_mask == int(mask_id)
-        mask = torch.from_numpy(mask).unsqueeze(0)
-        mask = self.resize_transform(mask)
+        label_pitch = Image.open(label_pitch_file).convert("L")
+        numpy_label_pitch = np.array(label_pitch)
+        label_pitch = torch.from_numpy(numpy_label_pitch).unsqueeze(0).float().div(255)
+        label_pitch = self.resize_transform(label_pitch)
 
-        return image, label, label_angle, mask, raw_image
+        return image, label, label_roll, label_pitch, mask
 
     def __len__(self):
         return len(self.image_label_pairs)
@@ -281,7 +291,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
     model, criterion, optimizer, scheduler = init_model()
 
     model = torch.load(
-        "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_multi_angle.pth",
+        "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_multi_angle_30.pth",
     )
     model = model.module
 
@@ -293,121 +303,111 @@ def train(rank, world_size, images_root_path, labels_root_path):
     validation_loss = 0.0
 
     with torch.no_grad():  # Disable gradient computation
-        for images, labels, labels_angle, mask, raw_numpy in inference_dataloader:
-            images, labels, labels_angle, mask = (
+        for (
+            images,
+            labels,
+            labels_angle_roll,
+            labels_angle_pitch,
+            mask,
+        ) in inference_dataloader:
+            images, labels, labels_angle_roll, labels_angle_pitch, mask = (
                 images.to(rank),
                 labels.to(rank),
-                labels_angle.to(rank),
+                labels_angle_roll.to(rank),
+                labels_angle_pitch.to(rank),
                 mask.to(rank),
             )
-            depth_out, affordance_map_out, affordance_map_angle_out = model(
-                images, mask
-            )
+            (
+                depth_out,
+                affordance_map_out,
+                affordance_map_roll_out,
+                affordance_map_pitch_out,
+            ) = model(images, mask)
 
             loss = criterion(affordance_map_out, labels)
-            loss_angle = criterion(affordance_map_angle_out, labels_angle)
-            print(
-                affordance_map_out.shape,
-                labels.shape,
-                affordance_map_angle_out.shape,
-                labels_angle.shape,
+            loss_angle_roll = criterion(affordance_map_roll_out, labels_angle_roll)
+            loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
+            scaled_loss = (
+                loss * scaling_factor
+                + loss_angle_roll * scaling_factor
+                + loss_angle_pitch * scaling_factor
             )
+
+            fig, axs = plt.subplots(3, 2, figsize=(12, 3))
+
             affordance_map_out = affordance_map_out.squeeze(0).squeeze(0)
             labels = labels.squeeze(0).squeeze(0)
-            affordance_map_angle_out = affordance_map_angle_out.squeeze(0).squeeze(0)
-            labels_angle = labels_angle.squeeze(0).squeeze(0)
 
-            # Find the index of the maximum value in affordance_map_out
+            affordance_map_pitch_out = (
+                affordance_map_pitch_out.squeeze(0).squeeze(0).detach().cpu().numpy()
+            )
+            affordance_map_roll_out = (
+                affordance_map_roll_out.squeeze(0).squeeze(0).detach().cpu().numpy()
+            )
+
             affordance_map_out = affordance_map_out.detach().cpu().numpy()
             max_idx = np.unravel_index(
                 affordance_map_out.argmax(), affordance_map_out.shape
             )
             max_y, max_x = max_idx  # Coordinates of the maximum value
-
-            print(labels_angle[max_y, max_x], affordance_map_angle_out[max_y, max_x])
-
+            print()
             print(
-                "actual angle",
-                decode_roll_pitch(
-                    (labels_angle[max_y, max_x] * 255)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .astype(np.uint8)
-                ),
+                affordance_map_out[max_y, max_x],
+                affordance_map_pitch_out[max_y, max_x] * 180 / np.pi - 30,
+                affordance_map_roll_out[max_y, max_x] * 180 / np.pi - 30,
             )
-            print(
-                "predicted angle",
-                decode_roll_pitch(
-                    (affordance_map_angle_out[max_y, max_x] * 255)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .astype(np.uint8)
-                ),
-            )
-
-            half_window = 3 // 2
-            # Extract a window around the maximum coordinate
-            y_start = max(0, max_y - half_window)
-            y_end = min(affordance_map_angle_out.shape[0], max_y + half_window + 1)
-            x_start = max(0, max_x - half_window)
-            x_end = min(affordance_map_angle_out.shape[1], max_x + half_window + 1)
-
-            # Get the pixels in the window
-            window_labels_angle = labels_angle[y_start:y_end, x_start:x_end]
-            window_affordance_map_angle_out = affordance_map_angle_out[
-                y_start:y_end, x_start:x_end
-            ]
-
-            # Compute the average values
-            avg_labels_angle = window_labels_angle.mean()
-            avg_affordance_map_angle_out = window_affordance_map_angle_out.mean()
-
-            # Decode the average values to get the angles
-            actual_angle = decode_roll_pitch(
-                (avg_labels_angle * 255).detach().cpu().numpy().astype(np.uint8)
-            )
-            predicted_angle = decode_roll_pitch(
-                (avg_affordance_map_angle_out * 255)
-                .detach()
-                .cpu()
-                .numpy()
-                .astype(np.uint8)
-            )
-
-            print("actual angle", actual_angle)
-            print("predicted angle", predicted_angle)
-
-            fig, axs = plt.subplots(1, 5, figsize=(12, 3))
-            # Plot the first subplot
-            axs[0].imshow(affordance_map_out)
-            axs[0].add_patch(
+            axs[0, 0].imshow(affordance_map_out)
+            axs[0, 0].add_patch(
                 plt.Circle((max_x, max_y), radius=2, color="red", fill=True)
             )
-            axs[0].axis("off")
+            axs[0, 0].axis("off")
 
             labels = labels.detach().cpu().numpy()
             max_idx = np.unravel_index(labels.argmax(), labels.shape)
-            max_y, max_x = max_idx  # Coordinates of the maximum value
-            axs[1].imshow(labels)
-            axs[1].add_patch(
-                plt.Circle((max_x, max_y), radius=2, color="red", fill=True)
+            max_y_l, max_x_l = max_idx  # Coordinates of the maximum value
+            print(
+                labels[max_y_l, max_x_l],
+                labels_angle_pitch.squeeze(0)
+                .squeeze(0)
+                .detach()
+                .cpu()
+                .numpy()[max_y_l, max_x_l]
+                * 180
+                / np.pi
+                - 30,
+                labels_angle_roll.squeeze(0)
+                .squeeze(0)
+                .detach()
+                .cpu()
+                .numpy()[max_y_l, max_x_l]
+                * 180
+                / np.pi
+                - 30,
             )
-            axs[1].axis("off")
+            axs[0, 1].imshow(labels)
+            axs[0, 1].add_patch(
+                plt.Circle((max_x_l, max_y_l), radius=2, color="red", fill=True)
+            )
+            axs[0, 1].axis("off")
 
-            axs[2].imshow(affordance_map_angle_out.detach().cpu().numpy())
-            axs[2].axis("off")
+            axs[1, 0].imshow(
+                labels_angle_roll.squeeze(0).squeeze(0).detach().cpu().numpy()
+            )
+            axs[1, 0].axis("off")
 
-            axs[3].imshow(labels_angle.detach().cpu().numpy())
-            axs[3].axis("off")
+            axs[1, 1].imshow(affordance_map_roll_out)
+            axs[1, 1].axis("off")
 
-            axs[4].imshow(raw_numpy.squeeze(0))
-            axs[4].axis("off")
+            axs[2, 0].imshow(
+                labels_angle_pitch.squeeze(0).squeeze(0).detach().cpu().numpy()
+            )
+            axs[2, 0].axis("off")
+
+            axs[2, 1].imshow(affordance_map_pitch_out)
+            axs[2, 1].axis("off")
 
             plt.tight_layout()  # Adjust subplots to fit into the figure area.
             plt.show()
-            scaled_loss = loss * scaling_factor + loss_angle * scaling_factor
 
             validation_loss += scaled_loss.item()
 
@@ -425,7 +425,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
     images_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp"
-    labels_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/labels_nbv_3F_angle_2"
+    labels_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/aws_processed/labels_nbv_3F_angle_30"
 
     train(0, world_size, images_root, labels_root)
 

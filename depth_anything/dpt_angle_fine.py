@@ -248,7 +248,7 @@ class DPTHead(nn.Module):
         )
 
         self.scratch.affordance_final_conv = nn.Conv2d(
-            head_features_2, 2, kernel_size=1, stride=1
+            head_features_2, 3, kernel_size=1, stride=1
         )
         self.scratch.affordance_sigmoid = nn.Sigmoid()
 
@@ -313,15 +313,18 @@ class DPTHead(nn.Module):
         # x = self.scratch.affordance_feature_extraction(x)
 
         x = self.scratch.affordance_final_conv(x)
-        print(x.shape)
-        affordance_out = x[:, :, 0]
-        affordance_out_angle = x[:, :, 1]
+        affordance_out = x[:, 0, :, :].unsqueeze(1)
+        affordance_out_pitch = x[:, 1, :, :].unsqueeze(1)
+        affordance_out_roll = x[:, 2, :, :].unsqueeze(1)
         affordance_out = self.scratch.affordance_sigmoid(affordance_out)
-        affordance_out_angle = self.scratch.affordance_sigmoid(affordance_out_angle)
+        affordance_out_pitch = self.scratch.affordance_sigmoid(affordance_out_pitch)
+        affordance_out_roll = self.scratch.affordance_sigmoid(affordance_out_roll)
+        
         affordance_out = affordance_out * mask.float()
-        affordance_out_angle = affordance_out_angle * mask.float()
+        affordance_out_pitch = affordance_out_pitch * mask.float()
+        affordance_out_roll = affordance_out_roll * mask.float()
 
-        return out, affordance_out, affordance_out_angle
+        return out, affordance_out, affordance_out_pitch, affordance_out_roll
 
 
 class DPT_DINOv2(nn.Module):
@@ -372,7 +375,7 @@ class DPT_DINOv2(nn.Module):
 
         patch_h, patch_w = h // 14, w // 14
 
-        depth, affordance_map, affordance_map_angle = self.depth_head(features, patch_h, patch_w, mask)
+        depth, affordance_map, affordance_map_pitch, affordance_map_roll = self.depth_head(features, patch_h, patch_w, mask)
         depth = F.interpolate(depth, size=(h, w), mode="bilinear", align_corners=True)
         depth = F.relu(depth)
 
@@ -381,12 +384,17 @@ class DPT_DINOv2(nn.Module):
         )
         affordance_map = F.relu(affordance_map)
 
-        affordance_map_angle = F.interpolate(
-            affordance_map_angle, size=(h, w), mode="bilinear", align_corners=True
+        affordance_map_pitch = F.interpolate(
+            affordance_map_pitch, size=(h, w), mode="bilinear", align_corners=True
         )
-        affordance_map_angle = F.relu(affordance_map_angle)
+        affordance_map_pitch = F.relu(affordance_map_pitch)
 
-        return depth, affordance_map, affordance_map_angle
+        affordance_map_roll = F.interpolate(
+            affordance_map_roll, size=(h, w), mode="bilinear", align_corners=True
+        )
+        affordance_map_roll = F.relu(affordance_map_roll)
+
+        return depth, affordance_map, affordance_map_pitch, affordance_map_roll
 
 
 class DepthAnything(DPT_DINOv2, PyTorchModelHubMixin):

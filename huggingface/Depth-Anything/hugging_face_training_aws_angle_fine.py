@@ -124,17 +124,18 @@ class CustomDataset(Dataset):
                         ".jpg", ".png"
                     )
                     for label_file in glob.glob(label_pattern):
-                        if "affordance_map_angle" in label_file:
+                        if "affordance_map_roll" in label_file or "affordance_map_pitch" in label_file:
                             continue
                         label_img = Image.open(label_file).convert("L")
-                        label_angle_file = label_file.replace("affordance_map", "affordance_map_angle")
+                        label_roll_file = label_file.replace("affordance_map", "affordance_map_roll")
+                        label_pitch_file = label_file.replace("affordance_map", "affordance_map_pitch")
                         if np.any(np.array(label_img) > 0):
-                            pairs.append((image_file, label_file, label_angle_file, segmask_file, view_number))
+                            pairs.append((image_file, label_file, label_roll_file, label_pitch_file, segmask_file, view_number))
                         # pairs.append((image_file, label_file, segmask_file))
         return pairs
 
     def __getitem__(self, idx):
-        image_file, label_file, label_angle_file, segmask_file, view_number = self.image_label_pairs[idx]
+        image_file, label_file, label_roll_file, label_pitch_file, segmask_file, view_number = self.image_label_pairs[idx]
 
         # Load image
         numpy_image = cv2.imread(image_file).astype(np.uint8)
@@ -145,7 +146,6 @@ class CustomDataset(Dataset):
         image = torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
-
 
         numpy_mask = cv2.imread(segmask_file, 0)
         match = re.search(self.pattern, label_file)
@@ -161,30 +161,17 @@ class CustomDataset(Dataset):
         label = torch.from_numpy(numpy_label).unsqueeze(0).float().div(255)
         label = self.resize_transform(label)
 
-        label_angle = Image.open(label_angle_file).convert("L")
-        numpy_label_angle = np.array(label_angle)
-        numpy_label_angle[(numpy_label_angle == 0) | (numpy_label_angle == 255)] = 119
-        numpy_label_angle = numpy_label_angle*numpy_mask
-        label_angle = torch.from_numpy(numpy_label_angle).unsqueeze(0)
-        label_angle = self.resize_transform(label_angle).squeeze(0)
-        label_angle_pitch, label_angle_roll = self.decode_roll_pitch(label_angle)
+        label_roll = Image.open(label_roll_file).convert("L")
+        numpy_label_roll = np.array(label_roll)
+        label_roll = torch.from_numpy(numpy_label_roll).unsqueeze(0).float().div(255)
+        label_roll = self.resize_transform(label_roll)
 
-        label_angle_pitch = self.encode_roll_pitch(label_angle_pitch).unsqueeze(0).float().div(255)
-        label_angle_roll = self.encode_roll_pitch(label_angle_roll).unsqueeze(0).float().div(255)
+        label_pitch = Image.open(label_pitch_file).convert("L")
+        numpy_label_pitch = np.array(label_pitch)
+        label_pitch = torch.from_numpy(numpy_label_pitch).unsqueeze(0).float().div(255)
+        label_pitch = self.resize_transform(label_pitch)
 
-
-        return image, label, label_angle_pitch, label_angle_roll, mask
-    
-    def decode_roll_pitch(self, pixel_value):
-        quantized_roll = (pixel_value >> 4) & 0x0F
-        quantized_pitch = pixel_value & 0x0F
-        roll = (quantized_roll / 15.0) * 30.0 - 15.0
-        pitch = (quantized_pitch / 15.0) * 30.0 - 15.0
-        return pitch, roll
-    
-    def encode_roll_pitch(self, angle):
-        normalized_angle = (angle + 15) / 30
-        return normalized_angle
+        return image, label, label_roll, label_pitch, mask
 
     def __len__(self):
         return len(self.image_label_pairs)
@@ -324,16 +311,16 @@ def train(rank, world_size, images_root_path, labels_root_path):
         sampler_train.set_epoch(epoch)
         sampler_val.set_epoch(epoch)
 
-        for images, labels, labels_angle_pitch, labels_angle_roll, mask in train_dataloader:
-            images, labels, labels_angle_pitch, labels_angle_roll, mask = images.to(rank), labels.to(rank), labels_angle_pitch.to(rank), labels_angle_roll.to(rank), mask.to(rank)
+        for images, labels, labels_angle_roll, labels_angle_pitch, mask in train_dataloader:
+            images, labels, labels_angle_roll, labels_angle_pitch, mask = images.to(rank), labels.to(rank), labels_angle_roll.to(rank), labels_angle_pitch.to(rank), mask.to(rank)
             optimizer.zero_grad()
 
-            depth_out, affordance_map_out, affordance_map_pitch_out, affordance_map_roll_out = model(images, mask)
+            depth_out, affordance_map_out, affordance_map_roll_out, affordance_map_pitch_out = model(images, mask)
 
             loss = criterion(affordance_map_out, labels)
-            loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
             loss_angle_roll  = criterion(affordance_map_roll_out, labels_angle_roll)
-            scaled_loss = loss * scaling_factor + loss_angle_pitch * scaling_factor + loss_angle_roll * scaling_factor
+            loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
+            scaled_loss = loss * scaling_factor + loss_angle_roll * scaling_factor + loss_angle_pitch * scaling_factor
 
             scaled_loss.backward()
             optimizer.step()
@@ -350,14 +337,14 @@ def train(rank, world_size, images_root_path, labels_root_path):
         validation_loss = 0.0
 
         with torch.no_grad():  # Disable gradient computation
-            for images, labels, labels_angle_pitch, labels_angle_roll, mask in val_dataloader:
-                images, labels, labels_angle_pitch, labels_angle_roll, mask = images.to(rank), labels.to(rank), labels_angle_pitch.to(rank), labels_angle_roll.to(rank), mask.to(rank)
-                depth_out, affordance_map_out, affordance_map_pitch_out, affordance_map_roll_out = model(images, mask)
+            for images, labels, labels_angle_roll, labels_angle_pitch, mask in val_dataloader:
+                images, labels, labels_angle_roll, labels_angle_pitch, mask = images.to(rank), labels.to(rank), labels_angle_roll.to(rank), labels_angle_pitch.to(rank), mask.to(rank)
+                depth_out, affordance_map_out, affordance_map_roll_out, affordance_map_pitch_out = model(images, mask)
 
                 loss = criterion(affordance_map_out, labels)
-                loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
                 loss_angle_roll  = criterion(affordance_map_roll_out, labels_angle_roll)
-                scaled_loss = loss * scaling_factor + loss_angle_pitch * scaling_factor + loss_angle_roll * scaling_factor
+                loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
+                scaled_loss = loss * scaling_factor + loss_angle_roll * scaling_factor + loss_angle_pitch * scaling_factor
 
                 validation_loss += scaled_loss.item()
 
@@ -367,7 +354,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             lowest_loss = avg_validation_loss
             torch.save(
                 model,
-                "/home/ubuntu/checkpoint_multi_angle_restricted.pth",
+                "/home/ubuntu/checkpoint_multi_angle_30.pth",
             )
         if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
@@ -388,7 +375,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
     images_root="/home/ubuntu/compress_observation_2_gp"
-    labels_root="/home/ubuntu/labels_nbv_3F_angle_2"
+    labels_root="/home/ubuntu/labels_nbv_3F_angle_30"
 
     # Example training loop
     mp.spawn(
