@@ -254,19 +254,19 @@ class CustomDataset(Dataset):
         # numpy_image = numpy_image[
         #     crop_bin_dim[0] : crop_bin_dim[1], crop_bin_dim[2] : crop_bin_dim[3]
         # ]
-        # rgb_image_cropped = torch.from_numpy(numpy_image).cuda()
+        # rgb_image_cropped = torch.from_numpy(numpy_image).to(self.rank)
 
         depth_image = np.load(depth_image_file)
         depth_image = depth_image[
             crop_bin_dim[0] : crop_bin_dim[1], crop_bin_dim[2] : crop_bin_dim[3]
         ]
-        depth_image_cropped = torch.from_numpy(depth_image).to(torch.float16).cuda()
+        depth_image_cropped = torch.from_numpy(depth_image).to(torch.float16).to(self.rank)
 
         numpy_mask = cv2.imread(segmask_file, cv2.IMREAD_UNCHANGED)
         numpy_mask = numpy_mask[
             crop_bin_dim[0] : crop_bin_dim[1], crop_bin_dim[2] : crop_bin_dim[3]
         ]
-        segmask_cropped = torch.from_numpy(numpy_mask).cuda()
+        segmask_cropped = torch.from_numpy(numpy_mask).to(self.rank)
 
         affordance_map_path = ""
         affordance_map_pitch_path = ""
