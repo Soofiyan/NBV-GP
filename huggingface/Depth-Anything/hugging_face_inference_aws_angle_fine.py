@@ -108,14 +108,13 @@ class CustomDataset(Dataset):
                     # Derive the base name for the image file to match labels
                     base_name = os.path.splitext(os.path.basename(image_file))[0]
                     count = base_name.split("_")[-1]
-                    view_number = base_name.split("_")[-2]
                     # Pattern for corresponding label files
                     label_pattern = os.path.join(
                         self.labels_root,
                         run_id,
                         "3F",
                         folder_id,
-                        f"affordance_map_*_{folder_id}_{view_number}_{count}.png",
+                        f"affordance_map_*_{folder_id}_{count}.png",
                     )
                     # Find all matching label files and add to pairs
                     segmask_file = image_file.replace("rgb", "segmask").replace(
@@ -141,8 +140,7 @@ class CustomDataset(Dataset):
                                     label_file,
                                     label_roll_file,
                                     label_pitch_file,
-                                    segmask_file,
-                                    view_number,
+                                    segmask_file
                                 )
                             )
                         # pairs.append((image_file, label_file, segmask_file))
@@ -155,12 +153,12 @@ class CustomDataset(Dataset):
             label_roll_file,
             label_pitch_file,
             segmask_file,
-            view_number,
         ) = self.image_label_pairs[idx]
 
         # Load image
         numpy_image = cv2.imread(image_file).astype(np.uint8)
         numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
+        view_number = "7"
         crop_bin_dim = self.crop_bin_dim_dict[str(view_number)]
 
         numpy_image = CropTransform(crop_bin_dim)(numpy_image)
@@ -169,10 +167,12 @@ class CustomDataset(Dataset):
         image = self.resize_transform(image)
 
         numpy_mask = cv2.imread(segmask_file, 0)
+        
         match = re.search(self.pattern, label_file)
         mask_id = match.group(1)
         numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
         numpy_mask = numpy_mask == int(mask_id)
+        
         mask = torch.from_numpy(numpy_mask).unsqueeze(0)
         mask = self.resize_transform(mask)
 
@@ -291,7 +291,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
     model, criterion, optimizer, scheduler = init_model()
 
     model = torch.load(
-        "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_multi_angle_30.pth",
+        "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/Depth-Anything/huggingface/Depth-Anything/weights/checkpoint_multi_angle_30_c.pth",
     )
     model = model.module
 
@@ -324,6 +324,8 @@ def train(rank, world_size, images_root_path, labels_root_path):
                 affordance_map_pitch_out,
             ) = model(images, mask)
 
+            print(torch.unique(affordance_map_out))
+
             loss = criterion(affordance_map_out, labels)
             loss_angle_roll = criterion(affordance_map_roll_out, labels_angle_roll)
             loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
@@ -353,8 +355,8 @@ def train(rank, world_size, images_root_path, labels_root_path):
             print()
             print(
                 affordance_map_out[max_y, max_x],
-                affordance_map_pitch_out[max_y, max_x] * 180 / np.pi - 30,
-                affordance_map_roll_out[max_y, max_x] * 180 / np.pi - 30,
+                (affordance_map_roll_out[max_y, max_x] * 180 / np.pi - 30),
+                (affordance_map_pitch_out[max_y, max_x] * 180 / np.pi - 30)/3,
             )
             axs[0, 0].imshow(affordance_map_out)
             axs[0, 0].add_patch(
@@ -367,7 +369,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             max_y_l, max_x_l = max_idx  # Coordinates of the maximum value
             print(
                 labels[max_y_l, max_x_l],
-                labels_angle_pitch.squeeze(0)
+                labels_angle_roll.squeeze(0)
                 .squeeze(0)
                 .detach()
                 .cpu()
@@ -375,7 +377,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
                 * 180
                 / np.pi
                 - 30,
-                labels_angle_roll.squeeze(0)
+                labels_angle_pitch.squeeze(0)
                 .squeeze(0)
                 .detach()
                 .cpu()
@@ -425,7 +427,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
     images_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp"
-    labels_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/aws_processed/labels_nbv_3F_angle_30"
+    labels_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/aws_processed/labels_nbv_3F_angle_c"
 
     train(0, world_size, images_root, labels_root)
 
