@@ -39,7 +39,7 @@ class CropTransform:
         # Fill the rhombus with white (255)
         cv2.fillPoly(mask, points, (255, 255, 255))
         return mask
-    
+
     def crop_image(self, image, mask, pad_size=50):
         # Apply mask to the image (single-channel)
 
@@ -57,9 +57,7 @@ class CropTransform:
 
     def __call__(self, x):
         mask_rgb = self.create_rhombus_mask(x, self.crop_dim)
-        rgb_image_cropped = self.crop_image(
-            x, mask_rgb, pad_size=50
-        )
+        rgb_image_cropped = self.crop_image(x, mask_rgb, pad_size=50)
         return rgb_image_cropped
 
 
@@ -78,24 +76,6 @@ class CustomDataset(Dataset):
         self.image_label_pairs = self._get_image_label_pairs()
 
         self.pattern = r"affordance_map_(\d+)_"
-        self.crop_bin_dim_dict = {
-            "0": [(239, 102), (465, 112), (447, 295), (237, 307)],
-            "1": [(225, 100), (463, 107), (447, 299), (227, 309)],
-            "2": [(193, 102), (447, 102), (437, 305), (206, 308)],
-            "3": [(179, 109), (415, 100), (415, 309), (194, 299)],
-            "4": [(176, 113), (401, 102), (406, 309), (194, 296)],
-            "5": [(239, 69), (465, 85), (463, 276), (238, 291)],
-            "6": [(224, 71), (460, 81), (460, 281), (223, 294)],
-            "7": [(196, 74), (443, 72), (445, 291), (197, 294)],
-            "8": [(180, 82), (416, 71), (416, 294), (182, 285)],
-            "9": [(178, 90), (402, 73), (405, 294), (180, 278)],
-            "10": [(236, 55), (447, 68), (465, 250), (238, 262)],
-            "11": [(225, 54), (447, 64), (464, 256), (224, 260)],
-            "12": [(203, 55), (436, 54), (447, 259), (194, 259)],
-            "13": [(192, 64), (414, 55), (414, 262), (175, 255)],
-            "14": [(192, 71), (402, 54), (402, 263), (175, 253)],
-        }
-
 
         self.roll_values = list(range(-30, 31, 5))
         self.pitch_values = list(range(-30, 31, 5))
@@ -114,39 +94,62 @@ class CustomDataset(Dataset):
                     # Derive the base name for the image file to match labels
                     base_name = os.path.splitext(os.path.basename(image_file))[0]
                     count = base_name.split("_")[-1]
-                    view_number = base_name.split("_")[-2]
                     # Pattern for corresponding label files
                     label_pattern = os.path.join(
                         self.labels_root,
                         run_id,
                         "3F",
                         folder_id,
-                        f"affordance_map_*_{folder_id}_{view_number}_{count}.png",
+                        f"affordance_map_*_{folder_id}_{count}.png",
                     )
                     # Find all matching label files and add to pairs
                     segmask_file = image_file.replace("rgb", "segmask").replace(
                         ".jpg", ".png"
                     )
                     for label_file in glob.glob(label_pattern):
-                        if "affordance_map_roll" in label_file or "affordance_map_pitch" in label_file:
+                        if (
+                            "affordance_map_roll" in label_file
+                            or "affordance_map_pitch" in label_file
+                        ):
                             continue
                         label_img = Image.open(label_file).convert("L")
-                        label_roll_file = label_file.replace("affordance_map", "affordance_map_roll")
-                        label_pitch_file = label_file.replace("affordance_map", "affordance_map_pitch")
+                        label_roll_file = label_file.replace(
+                            "affordance_map", "affordance_map_roll"
+                        )
+                        label_pitch_file = label_file.replace(
+                            "affordance_map", "affordance_map_pitch"
+                        )
                         if np.any(np.array(label_img) > 0):
-                            pairs.append((image_file, label_file, label_roll_file, label_pitch_file, segmask_file, view_number))
+                            pairs.append(
+                                (
+                                    image_file,
+                                    label_file,
+                                    label_roll_file,
+                                    label_pitch_file,
+                                    segmask_file,
+                                )
+                            )
                         # pairs.append((image_file, label_file, segmask_file))
         return pairs
 
     def __getitem__(self, idx):
-        image_file, label_file, label_roll_file, label_pitch_file, segmask_file, view_number = self.image_label_pairs[idx]
+        (
+            image_file,
+            label_file,
+            label_roll_file,
+            label_pitch_file,
+            segmask_file,
+        ) = self.image_label_pairs[idx]
 
         # Load image
         numpy_image = cv2.imread(image_file).astype(np.uint8)
         numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
-        crop_bin_dim = self.crop_bin_dim_dict[str(view_number)]
 
-        numpy_image = CropTransform(crop_bin_dim)(numpy_image)
+        crop_bin_dim = [73, 287, 195, 442]
+
+        numpy_image = numpy_image[
+            crop_bin_dim[0] : crop_bin_dim[1], crop_bin_dim[2] : crop_bin_dim[3]
+        ]
         image = torch.from_numpy(numpy_image).permute(2, 0, 1).float().div(255)
         image = self.normalize_transform(image)
         image = self.resize_transform(image)
@@ -154,7 +157,9 @@ class CustomDataset(Dataset):
         numpy_mask = cv2.imread(segmask_file, 0)
         match = re.search(self.pattern, label_file)
         mask_id = match.group(1)
-        numpy_mask = CropTransform(crop_bin_dim)(numpy_mask)
+        numpy_mask = numpy_mask[
+            crop_bin_dim[0] : crop_bin_dim[1], crop_bin_dim[2] : crop_bin_dim[3]
+        ]
         numpy_mask = numpy_mask == int(mask_id)
         mask = torch.from_numpy(numpy_mask).unsqueeze(0)
         mask = self.resize_transform(mask)
@@ -169,11 +174,16 @@ class CustomDataset(Dataset):
         numpy_label_roll = np.array(label_roll)
         label_roll = torch.from_numpy(numpy_label_roll).unsqueeze(0).float().div(255)
         label_roll = self.resize_transform(label_roll)
+        plt.imshow(label_roll.squeeze(0).detach().cpu().numpy())
+        plt.show()
 
         label_pitch = Image.open(label_pitch_file).convert("L")
         numpy_label_pitch = np.array(label_pitch)
         label_pitch = torch.from_numpy(numpy_label_pitch).unsqueeze(0).float().div(255)
         label_pitch = self.resize_transform(label_pitch)
+
+        plt.imshow(label_pitch.squeeze(0).detach().cpu().numpy())
+        plt.show()
 
         return image, label, label_roll, label_pitch, mask
 
@@ -315,16 +325,37 @@ def train(rank, world_size, images_root_path, labels_root_path):
         sampler_train.set_epoch(epoch)
         sampler_val.set_epoch(epoch)
 
-        for images, labels, labels_angle_roll, labels_angle_pitch, mask in train_dataloader:
-            images, labels, labels_angle_roll, labels_angle_pitch, mask = images.to(rank), labels.to(rank), labels_angle_roll.to(rank), labels_angle_pitch.to(rank), mask.to(rank)
+        for (
+            images,
+            labels,
+            labels_angle_roll,
+            labels_angle_pitch,
+            mask,
+        ) in train_dataloader:
+            images, labels, labels_angle_roll, labels_angle_pitch, mask = (
+                images.to(rank),
+                labels.to(rank),
+                labels_angle_roll.to(rank),
+                labels_angle_pitch.to(rank),
+                mask.to(rank),
+            )
             optimizer.zero_grad()
 
-            depth_out, affordance_map_out, affordance_map_roll_out, affordance_map_pitch_out = model(images, mask)
+            (
+                depth_out,
+                affordance_map_out,
+                affordance_map_roll_out,
+                affordance_map_pitch_out,
+            ) = model(images, mask)
 
             loss = criterion(affordance_map_out, labels)
-            loss_angle_roll  = criterion(affordance_map_roll_out, labels_angle_roll)
+            loss_angle_roll = criterion(affordance_map_roll_out, labels_angle_roll)
             loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
-            scaled_loss = loss * scaling_factor + loss_angle_roll * scaling_factor + loss_angle_pitch * scaling_factor
+            scaled_loss = (
+                loss * scaling_factor
+                + loss_angle_roll * scaling_factor
+                + loss_angle_pitch * scaling_factor
+            )
 
             scaled_loss.backward()
             optimizer.step()
@@ -341,14 +372,37 @@ def train(rank, world_size, images_root_path, labels_root_path):
         validation_loss = 0.0
 
         with torch.no_grad():  # Disable gradient computation
-            for images, labels, labels_angle_pitch, labels_angle_roll, mask in val_dataloader:
-                images, labels, labels_angle_pitch, labels_angle_roll, mask = images.to(rank), labels.to(rank), labels_angle_pitch.to(rank), labels_angle_roll.to(rank), mask.to(rank)
-                depth_out, affordance_map_out, affordance_map_pitch_out, affordance_map_roll_out = model(images, mask)
+            for (
+                images,
+                labels,
+                labels_angle_pitch,
+                labels_angle_roll,
+                mask,
+            ) in val_dataloader:
+                images, labels, labels_angle_pitch, labels_angle_roll, mask = (
+                    images.to(rank),
+                    labels.to(rank),
+                    labels_angle_pitch.to(rank),
+                    labels_angle_roll.to(rank),
+                    mask.to(rank),
+                )
+                (
+                    depth_out,
+                    affordance_map_out,
+                    affordance_map_pitch_out,
+                    affordance_map_roll_out,
+                ) = model(images, mask)
 
                 loss = criterion(affordance_map_out, labels)
-                loss_angle_pitch = criterion(affordance_map_pitch_out, labels_angle_pitch)
-                loss_angle_roll  = criterion(affordance_map_roll_out, labels_angle_roll)
-                scaled_loss = loss * scaling_factor + loss_angle_pitch * scaling_factor + loss_angle_roll * scaling_factor
+                loss_angle_pitch = criterion(
+                    affordance_map_pitch_out, labels_angle_pitch
+                )
+                loss_angle_roll = criterion(affordance_map_roll_out, labels_angle_roll)
+                scaled_loss = (
+                    loss * scaling_factor
+                    + loss_angle_pitch * scaling_factor
+                    + loss_angle_roll * scaling_factor
+                )
 
                 validation_loss += scaled_loss.item()
 
@@ -378,8 +432,8 @@ if __name__ == "__main__":
 
     world_size = torch.cuda.device_count()
 
-    images_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp"
-    labels_root="/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/aws_processed/labels_nbv_3F_angle_30"
+    images_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp"
+    labels_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/aws_processed/labels_nbv_3F_angle_c"
 
     # Example training loop
     mp.spawn(
