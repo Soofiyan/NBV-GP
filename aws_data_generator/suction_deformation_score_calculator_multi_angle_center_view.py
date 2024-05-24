@@ -190,10 +190,10 @@ class CustomDataset(Dataset):
         self.image_label_pairs = self._get_image_label_pairs()
 
         self.pattern = r"affordance_map_(\d+)_"
-        self.limit_angle = 31 * torch.pi / 180
+        self.limit_angle = 16 * torch.pi / 180
 
-        positive_range = torch.linspace(0, torch.pi / 6, 7)
-        negative_range = torch.linspace(-torch.pi / 6, 0, 7)
+        positive_range = torch.linspace(0, torch.pi / 12, 6)
+        negative_range = torch.linspace(-torch.pi / 12, 0, 6)
         self.pitch_angle = torch.concatenate(
             (
                 positive_range,
@@ -278,7 +278,7 @@ class CustomDataset(Dataset):
         segmask_cropped = F.pad(segmask_cropped, padding_size, "constant", 0)
         depth_image_cropped = F.pad(depth_image_cropped, padding_size, "constant", 0)
 
-        temp_path = image_file.replace("compress_observation", "labels_nbv_3F_angle_c")
+        temp_path = image_file.replace("compress_observation", "labels_nbv_3F_angle_15_c")
 
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
 
@@ -329,17 +329,17 @@ class CustomDataset(Dataset):
                 affordance_map_path = (
                     image_file.replace("rgb", f"affordance_map_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_c")
+                    .replace("compress_observation", "labels_nbv_3F_angle_15_c")
                 )
                 affordance_map_roll_path = (
                     image_file.replace("rgb", f"affordance_map_roll_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_c")
+                    .replace("compress_observation", "labels_nbv_3F_angle_15_c")
                 )
                 affordance_map_pitch_path = (
                     image_file.replace("rgb", f"affordance_map_pitch_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_c")
+                    .replace("compress_observation", "labels_nbv_3F_angle_15_c")
                 )
 
                 if (
@@ -523,17 +523,17 @@ class CustomDataset(Dataset):
 
                         if roll == self.limit_angle or roll == -self.limit_angle:
                             encoded_roll = (
-                                (torch.tensor(0.0) * 180 / torch.pi + 30) / 60
+                                (torch.tensor(0.0) * 180 / torch.pi + 15) / 30
                             ) * 255
                         else:
-                            encoded_roll = ((roll * 180 / torch.pi + 30) / 60) * 255
+                            encoded_roll = ((roll * 180 / torch.pi + 15) / 30) * 255
 
                         if pitch == self.limit_angle or pitch == -self.limit_angle:
                             encoded_pitch = (
-                                (torch.tensor(0.0) * 180 / torch.pi + 30) / 60
+                                (torch.tensor(0.0) * 180 / torch.pi + 15) / 30
                             ) * 255
                         else:
-                            encoded_pitch = ((pitch * 180 / torch.pi + 30) / 60) * 255
+                            encoded_pitch = ((pitch * 180 / torch.pi + 15) / 30) * 255
 
                         angle_roll[greater] = encoded_roll.to(torch.float32).to(
                             self.rank
@@ -636,7 +636,7 @@ def collect_data(rank, world_size, images_root_path):
         dataset,
         batch_size=1,
         sampler=sampler,
-        num_workers=18,
+        num_workers=12,
         pin_memory=False,
     )
 

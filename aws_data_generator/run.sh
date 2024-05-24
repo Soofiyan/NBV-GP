@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Path to the Python script
-PYTHON_SCRIPT="suction_deformation_score_calculator_multi_angle_multi_view.py"
+PYTHON_SCRIPT="suction_deformation_score_calculator_multi_angle_center_view.py"
 
 # Log file
 LOG_FILE="run_log.txt"
