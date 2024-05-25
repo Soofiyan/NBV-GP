@@ -179,6 +179,8 @@ class CustomDataset(Dataset):
 
         label_pitch = Image.open(label_pitch_file).convert("L")
         numpy_label_pitch = np.array(label_pitch)
+        numpy_label_pitch[(numpy_label_pitch > 0) & ((numpy_label_pitch < 64) | (numpy_label_pitch > 191))] = 128
+        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch == 0)] = 128
         label_pitch = torch.from_numpy(numpy_label_pitch).unsqueeze(0).float().div(255)
         label_pitch = self.resize_transform(label_pitch)
 
