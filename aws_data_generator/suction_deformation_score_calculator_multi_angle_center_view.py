@@ -283,7 +283,7 @@ class CustomDataset(Dataset):
         segmask_cropped = F.pad(segmask_cropped, padding_size, "constant", 0)
         depth_image_cropped = F.pad(depth_image_cropped, padding_size, "constant", 0)
 
-        temp_path = image_file.replace("compress_observation", "labels_nbv_3F_angle_15_cc")
+        temp_path = image_file.replace("compress_observation", "labels_nbv_3F_angle_30_cc")
 
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
 
@@ -334,17 +334,17 @@ class CustomDataset(Dataset):
                 affordance_map_path = (
                     image_file.replace("rgb", f"affordance_map_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_15_cc")
+                    .replace("compress_observation", "labels_nbv_3F_angle_30_cc")
                 )
                 affordance_map_roll_path = (
                     image_file.replace("rgb", f"affordance_map_roll_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_15_cc")
+                    .replace("compress_observation", "labels_nbv_3F_angle_30_cc")
                 )
                 affordance_map_pitch_path = (
                     image_file.replace("rgb", f"affordance_map_pitch_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_15_cc")
+                    .replace("compress_observation", "labels_nbv_3F_angle_30_cc")
                 )
 
                 if (
