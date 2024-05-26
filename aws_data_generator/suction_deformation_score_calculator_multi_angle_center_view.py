@@ -518,7 +518,9 @@ class CustomDataset(Dataset):
                             best_score = torch.zeros_like(final_scores)
                             angle_roll = torch.zeros_like(final_scores)
                             angle_pitch = torch.zeros_like(final_scores)
+                            best_score_normal = torch.zeros_like(final_scores)
                             flag_first_angle = False
+                            best_score_normal = final_scores
 
                         greater = final_scores > best_score
 
@@ -543,6 +545,8 @@ class CustomDataset(Dataset):
                         
                         if(best_score_update):
                             best_score[greater] = final_scores[greater]
+                        else:
+                            best_score[greater] = best_score_normal[greater]
 
                         angle_roll[greater] = encoded_roll.to(torch.float32).to(
                             self.rank
