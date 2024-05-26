@@ -190,11 +190,11 @@ class CustomDataset(Dataset):
         self.image_label_pairs = self._get_image_label_pairs()
 
         self.pattern = r"affordance_map_(\d+)_"
-        self.limit_angle_roll = 16 * torch.pi / 180
+        self.limit_angle_roll = 31 * torch.pi / 180
 
-        positive_range = torch.linspace(0, torch.pi / 12, 6)
-        negative_range = torch.linspace(-torch.pi / 12, 0, 6)
-        self.pitch_angle = torch.concatenate(
+        positive_range = torch.linspace(0, torch.pi / 6, 7)
+        negative_range = torch.linspace(-torch.pi / 6, 0, 7)
+        self.roll_angle = torch.concatenate(
             (
                 positive_range,
                 negative_range[:-1],
@@ -202,18 +202,19 @@ class CustomDataset(Dataset):
             )
         )
 
-        positive_range = torch.linspace(0, torch.pi / 18, 6)
-        negative_range = torch.linspace(-torch.pi / 18, 0, 6)
-        self.limit_angle_pitch = 16 * torch.pi / 180
-        self.roll_angle = torch.concatenate(
+        positive_range = torch.linspace(0, torch.pi / 6, 7)
+        negative_range = torch.linspace(-torch.pi / 6, 0, 7)
+        self.limit_angle_pitch = 31 * torch.pi / 180
+        self.pitch_angle = torch.concatenate(
             (
                 positive_range,
                 negative_range[:-1],
                 torch.tensor([-self.limit_angle_pitch, self.limit_angle_pitch]),
             )
         )
-        print(self.pitch_angle * 180 / torch.pi)
+
         print(self.roll_angle * 180 / torch.pi)
+        print(self.pitch_angle * 180 / torch.pi)
 
         self.rank = rank
 
@@ -528,20 +529,16 @@ class CustomDataset(Dataset):
                         best_score_update = True
 
                         if roll == self.limit_angle_roll or roll == -self.limit_angle_roll:
-                            encoded_roll = (
-                                (torch.tensor(0.0) * 180 / torch.pi + 15) / 30
-                            ) * 255
-                        else:
-                            encoded_roll = ((roll * 180 / torch.pi + 15) / 30) * 255
+                            encoded_roll = torch.tensor(0.5) * 255
                             best_score_update = False
+                        else:
+                            encoded_roll = ((roll * 180 / torch.pi + 30) / 60) * 255
 
                         if pitch == self.limit_angle_pitch or pitch == -self.limit_angle_pitch:
-                            encoded_pitch = (
-                                (torch.tensor(0.0) * 180 / torch.pi + 10) / 20
-                            ) * 255
-                        else:
-                            encoded_pitch = ((pitch * 180 / torch.pi + 10) / 20) * 255
+                            encoded_pitch = torch.tensor(0.5) * 255
                             best_score_update = False
+                        else:
+                            encoded_pitch = ((pitch * 180 / torch.pi + 30) / 60) * 255
                         
                         if(best_score_update):
                             best_score[greater] = final_scores[greater]
