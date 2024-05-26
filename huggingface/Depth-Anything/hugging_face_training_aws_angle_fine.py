@@ -181,15 +181,15 @@ class CustomDataset(Dataset):
 
         label_roll = Image.open(label_roll_file).convert("L")
         numpy_label_roll = np.array(label_roll)
-        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll > 250)] = 128
-        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll < 5)] = 128
+        #numpy_label_roll[(numpy_label > 0) & (numpy_label_roll > 250)] = 128
+        #numpy_label_roll[(numpy_label > 0) & (numpy_label_roll < 5)] = 128
         label_roll = torch.from_numpy(numpy_label_roll).unsqueeze(0).float().div(255)
         label_roll = self.resize_transform(label_roll)
 
         label_pitch = Image.open(label_pitch_file).convert("L")
         numpy_label_pitch = np.array(label_pitch)
-        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch > 250)] = 128
-        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch < 5)] = 128
+        #numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch > 250)] = 128
+        #numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch < 5)] = 128
         label_pitch = torch.from_numpy(numpy_label_pitch).unsqueeze(0).float().div(255)
         label_pitch = self.resize_transform(label_pitch)
 
@@ -420,7 +420,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             lowest_loss = avg_validation_loss
             torch.save(
                 model,
-                "/home/ubuntu/checkpoint_multi_angle_15_c.pth",
+                "/home/ubuntu/checkpoint_multi_angle_15_c_2.pth",
             )
         if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
@@ -441,7 +441,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
     images_root = "/home/ubuntu/compress_observation"
-    labels_root = "/home/ubuntu/labels_nbv_3F_angle_15_c"
+    labels_root = "/home/ubuntu/labels_nbv_3F_angle_15_c_2"
 
     # Example training loop
     mp.spawn(
