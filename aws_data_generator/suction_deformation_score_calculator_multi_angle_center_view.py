@@ -282,7 +282,7 @@ class CustomDataset(Dataset):
         segmask_cropped = F.pad(segmask_cropped, padding_size, "constant", 0)
         depth_image_cropped = F.pad(depth_image_cropped, padding_size, "constant", 0)
 
-        temp_path = image_file.replace("compress_observation", "labels_nbv_3F_angle_15_c")
+        temp_path = image_file.replace("compress_observation", "labels_nbv_3F_angle_15_cc")
 
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
 
@@ -333,17 +333,17 @@ class CustomDataset(Dataset):
                 affordance_map_path = (
                     image_file.replace("rgb", f"affordance_map_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_15_c")
+                    .replace("compress_observation", "labels_nbv_3F_angle_15_cc")
                 )
                 affordance_map_roll_path = (
                     image_file.replace("rgb", f"affordance_map_roll_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_15_c")
+                    .replace("compress_observation", "labels_nbv_3F_angle_15_cc")
                 )
                 affordance_map_pitch_path = (
                     image_file.replace("rgb", f"affordance_map_pitch_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_15_c")
+                    .replace("compress_observation", "labels_nbv_3F_angle_15_cc")
                 )
 
                 if (
@@ -523,7 +523,7 @@ class CustomDataset(Dataset):
                         greater = final_scores > best_score
 
                         # best_score = torch.max(best_score, final_scores)
-                        best_score[greater] = final_scores[greater]
+                        best_score_update = True
 
                         if roll == self.limit_angle_roll or roll == -self.limit_angle_roll:
                             encoded_roll = (
@@ -531,6 +531,7 @@ class CustomDataset(Dataset):
                             ) * 255
                         else:
                             encoded_roll = ((roll * 180 / torch.pi + 15) / 30) * 255
+                            best_score_update = False
 
                         if pitch == self.limit_angle_pitch or pitch == -self.limit_angle_pitch:
                             encoded_pitch = (
@@ -538,6 +539,10 @@ class CustomDataset(Dataset):
                             ) * 255
                         else:
                             encoded_pitch = ((pitch * 180 / torch.pi + 10) / 20) * 255
+                            best_score_update = False
+                        
+                        if(best_score_update):
+                            best_score[greater] = final_scores[greater]
 
                         angle_roll[greater] = encoded_roll.to(torch.float32).to(
                             self.rank
