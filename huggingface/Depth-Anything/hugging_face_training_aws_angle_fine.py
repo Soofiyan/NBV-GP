@@ -420,7 +420,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             lowest_loss = avg_validation_loss
             torch.save(
                 model,
-                "/home/ubuntu/checkpoint_multi_angle_15_c_2.pth",
+                "/home/ubuntu/checkpoint_multi_angle_30_cc.pth",
             )
         if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
@@ -441,7 +441,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
     images_root = "/home/ubuntu/compress_observation"
-    labels_root = "/home/ubuntu/labels_nbv_3F_angle_15_c_2"
+    labels_root = "/home/ubuntu/labels_nbv_3F_angle_30_cc"
 
     # Example training loop
     mp.spawn(
