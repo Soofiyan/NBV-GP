@@ -182,7 +182,7 @@ class CustomDataset(Dataset):
         label_roll = Image.open(label_roll_file).convert("L")
         numpy_label_roll = np.array(label_roll).astype(np.float32)
         numpy_label_roll = numpy_label_roll - 128
-        numpy_label_roll[(numpy_label > 0)] *= 1.3333334
+        numpy_label_roll[(numpy_label > 0)] *= 1.5
         numpy_label_roll[(numpy_label > 0) & (numpy_label_roll > 128)] = 0
         numpy_label_roll[(numpy_label > 0) & (numpy_label_roll < -128)] = 0
         numpy_label_roll = numpy_label_roll + 128
@@ -193,7 +193,7 @@ class CustomDataset(Dataset):
         label_pitch = Image.open(label_pitch_file).convert("L")
         numpy_label_pitch = np.array(label_pitch).astype(np.float32)
         numpy_label_pitch = numpy_label_pitch - 128
-        numpy_label_pitch[(numpy_label > 0)] *= 1.714285714
+        numpy_label_pitch[(numpy_label > 0)] *= 2
         numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch > 128)] = 0
         numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch < -128)] = 0
         numpy_label_pitch = numpy_label_pitch + 128
@@ -236,7 +236,7 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=1e-3):
+def weighted_huber_loss(predictions, labels, delta=1.0, epsilon=2e-3):
     # Calculate the errors
     errors = predictions - labels
     # Define weights; here we use 1/(scores + epsilon) to avoid division by zero
