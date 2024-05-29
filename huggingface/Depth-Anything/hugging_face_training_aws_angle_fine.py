@@ -180,16 +180,24 @@ class CustomDataset(Dataset):
         label = self.resize_transform(label)
 
         label_roll = Image.open(label_roll_file).convert("L")
-        numpy_label_roll = np.array(label_roll)
-        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll > 212)] = 128
-        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll < 42)] = 128
+        numpy_label_roll = np.array(label_roll).astype(np.float32)
+        numpy_label_roll = numpy_label_roll - 128
+        numpy_label_roll[(numpy_label > 0)] *= 1.3333334
+        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll >= 128)] = 0
+        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll <= -128)] = 0
+        numpy_label_roll = numpy_label_roll + 128
+        numpy_label_roll = np.clip(numpy_label_roll, 0, 255)
         label_roll = torch.from_numpy(numpy_label_roll).unsqueeze(0).float().div(255)
         label_roll = self.resize_transform(label_roll)
 
         label_pitch = Image.open(label_pitch_file).convert("L")
-        numpy_label_pitch = np.array(label_pitch)
-        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch > 191)] = 128
-        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch < 64)] = 128
+        numpy_label_pitch = np.array(label_pitch).astype(np.float32)
+        numpy_label_pitch = numpy_label_pitch - 128
+        numpy_label_pitch[(numpy_label > 0)] *= 1.714285714
+        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch >= 128)] = 0
+        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch <= -128)] = 0
+        numpy_label_pitch = numpy_label_pitch + 128
+        numpy_label_pitch = np.clip(numpy_label_pitch, 0, 255)
         label_pitch = torch.from_numpy(numpy_label_pitch).unsqueeze(0).float().div(255)
         label_pitch = self.resize_transform(label_pitch)
 
