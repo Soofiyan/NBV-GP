@@ -171,16 +171,28 @@ class CustomDataset(Dataset):
         label = self.resize_transform(label)
 
         label_roll = Image.open(label_roll_file).convert("L")
-        numpy_label_roll = np.array(label_roll)
+        numpy_label_roll = np.array(label_roll).astype(np.float32)
+        plt.imshow(label_roll)
+        plt.show()
+        numpy_label_roll = numpy_label_roll - 128
+        numpy_label_roll[(numpy_label > 0)] *= 1.3333334
+        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll > 128)] = 0
+        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll < -128)] = 0
+        numpy_label_roll = numpy_label_roll + 128
+        numpy_label_roll = np.clip(numpy_label_roll, 0, 255)
         label_roll = torch.from_numpy(numpy_label_roll).unsqueeze(0).float().div(255)
         label_roll = self.resize_transform(label_roll)
         plt.imshow(label_roll.squeeze(0).detach().cpu().numpy())
         plt.show()
 
         label_pitch = Image.open(label_pitch_file).convert("L")
-        numpy_label_pitch = np.array(label_pitch)
-        numpy_label_pitch[(numpy_label_pitch > 0) & ((numpy_label_pitch < 64) | (numpy_label_pitch > 191))] = 128
-        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch == 0)] = 128
+        numpy_label_pitch = np.array(label_pitch).astype(np.float32)
+        numpy_label_pitch = numpy_label_pitch - 128
+        numpy_label_pitch[(numpy_label > 0)] *= 1.714285714
+        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch > 128)] = 0
+        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch < -128)] = 0
+        numpy_label_pitch = numpy_label_pitch + 128
+        numpy_label_pitch = np.clip(numpy_label_pitch, 0, 255)
         label_pitch = torch.from_numpy(numpy_label_pitch).unsqueeze(0).float().div(255)
         label_pitch = self.resize_transform(label_pitch)
 
@@ -435,7 +447,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
     images_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/temp"
-    labels_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/aws_processed/labels_nbv_3F_angle_c"
+    labels_root = "/media/soofiyan_ws/ced8ad28-6b75-4190-8413-8b02bc00b409/Next-Best-View-3D-Object-Manipulation/System_Identification_Data/aws_processed/labels_nbv_3F_angle_30_cc"
 
     # Example training loop
     mp.spawn(
