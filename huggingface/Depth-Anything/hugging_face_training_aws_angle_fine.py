@@ -180,24 +180,12 @@ class CustomDataset(Dataset):
         label = self.resize_transform(label)
 
         label_roll = Image.open(label_roll_file).convert("L")
-        numpy_label_roll = np.array(label_roll).astype(np.float32)
-        numpy_label_roll = numpy_label_roll - 128
-        numpy_label_roll[(numpy_label > 0)] *= 1.5
-        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll > 128)] = 0
-        numpy_label_roll[(numpy_label > 0) & (numpy_label_roll < -128)] = 0
-        numpy_label_roll = numpy_label_roll + 128
-        numpy_label_roll = np.clip(numpy_label_roll, 0, 255)
+        numpy_label_roll = np.array(label_roll)
         label_roll = torch.from_numpy(numpy_label_roll).unsqueeze(0).float().div(255)
         label_roll = self.resize_transform(label_roll)
 
         label_pitch = Image.open(label_pitch_file).convert("L")
-        numpy_label_pitch = np.array(label_pitch).astype(np.float32)
-        numpy_label_pitch = numpy_label_pitch - 128
-        numpy_label_pitch[(numpy_label > 0)] *= 2
-        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch > 128)] = 0
-        numpy_label_pitch[(numpy_label > 0) & (numpy_label_pitch < -128)] = 0
-        numpy_label_pitch = numpy_label_pitch + 128
-        numpy_label_pitch = np.clip(numpy_label_pitch, 0, 255)
+        numpy_label_pitch = np.array(label_pitch)
         label_pitch = torch.from_numpy(numpy_label_pitch).unsqueeze(0).float().div(255)
         label_pitch = self.resize_transform(label_pitch)
 
@@ -428,7 +416,7 @@ def train(rank, world_size, images_root_path, labels_root_path):
             lowest_loss = avg_validation_loss
             torch.save(
                 model,
-                "/home/ubuntu/checkpoint_multi_angle_30_cc_stretch.pth",
+                "/home/ubuntu/checkpoint_multi_angle_30_c.pth",
             )
         if rank == 0:
             print(f"Validation Loss: {avg_validation_loss}")
@@ -449,7 +437,7 @@ if __name__ == "__main__":
     world_size = torch.cuda.device_count()
 
     images_root = "/home/ubuntu/compress_observation"
-    labels_root = "/home/ubuntu/labels_nbv_3F_angle_30_cc"
+    labels_root = "/home/ubuntu/labels_nbv_3F_angle_30_c"
 
     # Example training loop
     mp.spawn(
