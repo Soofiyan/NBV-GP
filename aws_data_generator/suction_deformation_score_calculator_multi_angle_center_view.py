@@ -190,10 +190,10 @@ class CustomDataset(Dataset):
         self.image_label_pairs = self._get_image_label_pairs()
 
         self.pattern = r"affordance_map_(\d+)_"
-        self.limit_angle_roll = 31 * torch.pi / 180
+        self.limit_angle_roll = 21 * torch.pi / 180
 
-        positive_range = torch.linspace(0, torch.pi / 6, 7)
-        negative_range = torch.linspace(-torch.pi / 6, 0, 7)
+        positive_range = torch.linspace(0, torch.pi / 9, 5)
+        negative_range = torch.linspace(-torch.pi / 9, 0, 5)
         self.roll_angle = torch.concatenate(
             (
                 positive_range,
@@ -202,9 +202,9 @@ class CustomDataset(Dataset):
             )
         )
 
-        positive_range = torch.linspace(0, torch.pi / 6, 7)
-        negative_range = torch.linspace(-torch.pi / 6, 0, 7)
-        self.limit_angle_pitch = 31 * torch.pi / 180
+        positive_range = torch.linspace(0, torch.pi / 9, 5)
+        negative_range = torch.linspace(-torch.pi / 9, 0, 5)
+        self.limit_angle_pitch = 21 * torch.pi / 180
         self.pitch_angle = torch.concatenate(
             (
                 positive_range,
@@ -245,9 +245,7 @@ class CustomDataset(Dataset):
         return pairs
 
     def __getitem__(self, idx):
-        image_file, depth_image_file, segmask_file = (
-            self.image_label_pairs[idx]
-        )
+        image_file, depth_image_file, segmask_file = self.image_label_pairs[idx]
         # print(image_file, depth_image_file, segmask_file, view_number)
 
         crop_bin_dim = [73, 287, 195, 442]
@@ -265,7 +263,9 @@ class CustomDataset(Dataset):
         depth_image = depth_image[
             crop_bin_dim[0] : crop_bin_dim[1], crop_bin_dim[2] : crop_bin_dim[3]
         ]
-        depth_image_cropped = torch.from_numpy(depth_image).to(torch.float16).to(self.rank)
+        depth_image_cropped = (
+            torch.from_numpy(depth_image).to(torch.float16).to(self.rank)
+        )
 
         numpy_mask = cv2.imread(segmask_file, cv2.IMREAD_UNCHANGED)
         numpy_mask = numpy_mask[
@@ -276,6 +276,7 @@ class CustomDataset(Dataset):
         affordance_map_path = ""
         affordance_map_pitch_path = ""
         affordance_map_roll_path = ""
+        affordance_map_zero_path = ""
 
         mask_numbers = torch.unique(segmask_cropped)
 
@@ -283,7 +284,9 @@ class CustomDataset(Dataset):
         segmask_cropped = F.pad(segmask_cropped, padding_size, "constant", 0)
         depth_image_cropped = F.pad(depth_image_cropped, padding_size, "constant", 0)
 
-        temp_path = image_file.replace("compress_observation", "labels_nbv_3F_angle_30_cc")
+        temp_path = image_file.replace(
+            "compress_observation", "labels_nbv_3F_angle_30_cc"
+        )
 
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
 
@@ -331,6 +334,13 @@ class CustomDataset(Dataset):
                 angle_pitch = None
                 flag_first_angle = True
 
+                best_score_normal = torch.zeros_like(final_scores)
+
+                affordance_map_zero_path = (
+                    image_file.replace("rgb", f"affordance_map_zero_{mask_number}")
+                    .replace(".jpg", ".png")
+                    .replace("compress_observation", "labels_nbv_3F_angle_30_cc")
+                )
                 affordance_map_path = (
                     image_file.replace("rgb", f"affordance_map_{mask_number}")
                     .replace(".jpg", ".png")
@@ -351,6 +361,7 @@ class CustomDataset(Dataset):
                     os.path.exists(affordance_map_path)
                     and os.path.exists(affordance_map_roll_path)
                     and os.path.exists(affordance_map_pitch_path)
+                    and os.path.exists(affordance_map_zero_path)
                 ):
                     continue
 
@@ -380,8 +391,15 @@ class CustomDataset(Dataset):
                         # plt.show()
 
                         affordance_map = torch.zeros_like(segmask_cropped).to(torch.int)
-                        affordance_map_roll = torch.zeros_like(segmask_cropped).to(torch.int)
-                        affordance_map_pitch = torch.zeros_like(segmask_cropped).to(torch.int)
+                        affordance_map_roll = torch.zeros_like(segmask_cropped).to(
+                            torch.int
+                        )
+                        affordance_map_pitch = torch.zeros_like(segmask_cropped).to(
+                            torch.int
+                        )
+                        affordance_map_zero = torch.zeros_like(segmask_cropped).to(
+                            torch.int
+                        )
 
                         non_zero_indices = torch.nonzero(depth_image_masked_rotated)
                         non_zero_coordinates = non_zero_indices[:, [1, 0]]
@@ -519,7 +537,6 @@ class CustomDataset(Dataset):
                             best_score = torch.zeros_like(final_scores)
                             angle_roll = torch.zeros_like(final_scores)
                             angle_pitch = torch.zeros_like(final_scores)
-                            best_score_normal = torch.zeros_like(final_scores)
                             flag_first_angle = False
                             best_score_normal = final_scores
 
@@ -528,29 +545,30 @@ class CustomDataset(Dataset):
                         # best_score = torch.max(best_score, final_scores)
                         best_score_update = True
 
-                        if roll == self.limit_angle_roll or roll == -self.limit_angle_roll:
-                            encoded_roll = torch.tensor(0.5) * 255
+                        if (
+                            roll == self.limit_angle_roll
+                            or roll == -self.limit_angle_roll
+                        ):
                             best_score_update = False
                         else:
-                            encoded_roll = ((roll * 180 / torch.pi + 30) / 60) * 255
+                            encoded_roll = ((roll * 180 / torch.pi + 20) / 40) * 255
+                            angle_roll[greater] = encoded_roll.to(torch.float32).to(
+                                self.rank
+                            )
 
-                        if pitch == self.limit_angle_pitch or pitch == -self.limit_angle_pitch:
-                            encoded_pitch = torch.tensor(0.5) * 255
+                        if (
+                            pitch == self.limit_angle_pitch
+                            or pitch == -self.limit_angle_pitch
+                        ):
                             best_score_update = False
                         else:
-                            encoded_pitch = ((pitch * 180 / torch.pi + 30) / 60) * 255
-                        
-                        if(best_score_update):
+                            encoded_pitch = ((pitch * 180 / torch.pi + 20) / 40) * 255
+                            angle_pitch[greater] = encoded_pitch.to(torch.float32).to(
+                                self.rank
+                            )
+
+                        if best_score_update:
                             best_score[greater] = final_scores[greater]
-                        else:
-                            best_score[greater] = best_score_normal[greater]
-
-                        angle_roll[greater] = encoded_roll.to(torch.float32).to(
-                            self.rank
-                        )
-                        angle_pitch[greater] = encoded_pitch.to(torch.float32).to(
-                            self.rank
-                        )
 
                 # num_zero_values_per_batch = torch.count_nonzero(
                 #     depth_values == 0, axis=1
@@ -575,6 +593,9 @@ class CustomDataset(Dataset):
                 affordance_map_pitch[base_coordinates[:, 1], base_coordinates[:, 0]] = (
                     (angle_pitch).round().to(torch.int)
                 )
+                affordance_map_zero[base_coordinates[:, 1], base_coordinates[:, 0]] = (
+                    (best_score_normal * 255 / 100).round().to(torch.int)
+                )
 
                 affordance_map = affordance_map[
                     padding_size[0] : -padding_size[1],
@@ -588,9 +609,17 @@ class CustomDataset(Dataset):
                     padding_size[0] : -padding_size[1],
                     padding_size[2] : -padding_size[3],
                 ]
+                affordance_map_zero = affordance_map_zero[
+                    padding_size[0] : -padding_size[1],
+                    padding_size[2] : -padding_size[3],
+                ]
 
                 cv2.imwrite(
                     affordance_map_path, affordance_map.cpu().numpy().astype(np.uint8)
+                )
+                cv2.imwrite(
+                    affordance_map_zero_path,
+                    affordance_map_zero.cpu().numpy().astype(np.uint8),
                 )
                 cv2.imwrite(
                     affordance_map_roll_path,
@@ -601,7 +630,12 @@ class CustomDataset(Dataset):
                     affordance_map_pitch.cpu().numpy().astype(np.uint8),
                 )
 
-        return affordance_map_path, affordance_map_roll_path, affordance_map_pitch_path
+        return (
+            affordance_map_path,
+            affordance_map_roll_path,
+            affordance_map_pitch_path,
+            affordance_map_zero_path,
+        )
 
     def __len__(self):
         return len(self.image_label_pairs)
@@ -655,6 +689,7 @@ def collect_data(rank, world_size, images_root_path):
         affordance_map_path,
         affordance_map_roll_path,
         affordance_map_pitch_path,
+        affordance_map_zero_path,
     ) in process_dataloader:
         print(count)
         count += 1
@@ -662,7 +697,12 @@ def collect_data(rank, world_size, images_root_path):
         # print_memory_usage(rank)
 
         # Explicitly delete or move tensors out of scope to free memory
-        del affordance_map_path, affordance_map_roll_path, affordance_map_pitch_path
+        del (
+            affordance_map_path,
+            affordance_map_roll_path,
+            affordance_map_pitch_path,
+            affordance_map_zero_path,
+        )
 
         # Collect garbage
         collect_garbage()
