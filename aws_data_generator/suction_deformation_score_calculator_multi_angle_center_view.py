@@ -285,7 +285,7 @@ class CustomDataset(Dataset):
         depth_image_cropped = F.pad(depth_image_cropped, padding_size, "constant", 0)
 
         temp_path = image_file.replace(
-            "compress_observation", "labels_nbv_3F_angle_30_cc"
+            "compress_observation", "labels_nbv_3F_angle_30_c"
         )
 
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
@@ -334,27 +334,27 @@ class CustomDataset(Dataset):
                 angle_pitch = None
                 flag_first_angle = True
 
-                best_score_normal = torch.zeros_like(final_scores)
+                best_score_normal = None
 
                 affordance_map_zero_path = (
                     image_file.replace("rgb", f"affordance_map_zero_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_30_cc")
+                    .replace("compress_observation", "labels_nbv_3F_angle_30_c")
                 )
                 affordance_map_path = (
                     image_file.replace("rgb", f"affordance_map_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_30_cc")
+                    .replace("compress_observation", "labels_nbv_3F_angle_30_c")
                 )
                 affordance_map_roll_path = (
                     image_file.replace("rgb", f"affordance_map_roll_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_30_cc")
+                    .replace("compress_observation", "labels_nbv_3F_angle_30_c")
                 )
                 affordance_map_pitch_path = (
                     image_file.replace("rgb", f"affordance_map_pitch_{mask_number}")
                     .replace(".jpg", ".png")
-                    .replace("compress_observation", "labels_nbv_3F_angle_30_cc")
+                    .replace("compress_observation", "labels_nbv_3F_angle_30_c")
                 )
 
                 if (
