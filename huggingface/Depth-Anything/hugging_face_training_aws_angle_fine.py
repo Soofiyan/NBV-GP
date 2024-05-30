@@ -124,7 +124,7 @@ class CustomDataset(Dataset):
                         if (
                             "affordance_map_roll" in label_file
                             or "affordance_map_pitch" in label_file
-                            or "affordance_map_zero" not in label_file
+                            or "affordance_map_zero" in label_file
                         ):
                             continue
                         label_img = Image.open(label_file).convert("L")
